@@ -38,19 +38,37 @@ cp env.example .env            # then export the vars, or use a loader
 go run ./cmd/api
 ```
 
-Endpoints currently served:
+`GET /healthz` / `GET /readyz` are unauthenticated liveness/readiness probes;
+the application API is mounted under `/api/v1` (see [Modules](#modules)).
 
-- `GET /healthz` — liveness
-- `GET /readyz` — readiness (pings the DB)
-- `GET /api/v1/semesters` — list semesters
+## Configuration
+
+All configuration comes from the environment (`env.example` documents every
+variable; secrets are never committed). Security-sensitive settings **fail
+closed**:
+
+| Variable                 | Default              | Notes                                                        |
+| ------------------------ | -------------------- | ------------------------------------------------------------ |
+| `APP_ENV`                | `production`         | `development` \| `staging` \| `production`. Unset → strict; an unknown value is rejected at startup. |
+| `COOKIE_SECURE`          | `true`               | Must be `true` in non-development.                           |
+| `ALLOWED_EMAIL_DOMAINS`  | — (empty)            | Comma-separated allow-list; **must be set** in non-development. |
+| `DATABASE_URL`           | local docker pg      | pgx connection string.                                       |
+| `SMTP_ADDR` / `MAIL_FROM`| Mailpit locally      | In development the login code is also logged (never in prod).|
+| `HTTP_ADDR`              | `:8080`              | Listen address.                                              |
+
+`Config.Validate()` runs at startup and a failure is fatal, so a production
+deploy that forgets `APP_ENV=production`, an email allow-list, or `COOKIE_SECURE`
+refuses to boot rather than running permissively. The local `docker-compose`
+stack opts into development explicitly.
 
 ## Tests
 
 ```bash
 go test ./...                  # pure domain unit tests (no DB needed)
 
-# Integration + concurrency tests need a Postgres. Point at one and run:
-TEST_DATABASE_URL="postgres://postgres:test@localhost:55432/puq?sslmode=disable" go test ./...
+# Integration + concurrency tests need a Postgres. Point at a test database
+# (the compose stack exposes one) and run:
+TEST_DATABASE_URL="postgres://postgres:postgres@localhost:5432/profundiza_uq_test?sslmode=disable" go test ./...
 ```
 
 The headline test, `TestSubmit_NoOverbookingUnderConcurrency`, fires 25 concurrent same-shift submissions at a capacity-1 group and asserts exactly one direct seat and a fair, unique arrival order — the PRD's #1 risk (RNF-001, no overbooking).
@@ -76,4 +94,4 @@ All modules follow `adapter -> app -> domain` and are wired in `cmd/api/main.go`
 
 **Cross-cutting:** every state change writes an `audit_events` row and enqueues notifications in the same transaction; concurrency is protected by row locks; migrations are guarded by a `pg_advisory_lock`.
 
-**Known gaps / next:** enforce the active enrollment window inside the submit transaction; `sqlc` + OpenTelemetry adoption; `students/import` multipart; richer report column sets.
+**Known gaps / next:** `sqlc` + OpenTelemetry adoption; `students/import` multipart upload; richer report column sets.

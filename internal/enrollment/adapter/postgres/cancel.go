@@ -13,7 +13,7 @@ import (
 	"github.com/uniquindio/profundiza-uq/internal/shared/audit"
 )
 
-// Cancel cancels a student's own request (BR-005). The request must belong to
+// Cancel cancels a student's own request. The request must belong to
 // the student and be in an active, non-terminal state. The cancellation, audit
 // event and notification commit atomically.
 func (r *SubmitRepo) Cancel(ctx context.Context, in app.CancelInput) (app.RequestView, error) {

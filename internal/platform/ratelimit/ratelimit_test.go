@@ -10,7 +10,7 @@ import (
 )
 
 // TestLimiter_Allow_BlocksAfterMax proves that after max requests the next one
-// is denied. This is the core behaviour required by Fix C (TRD §21).
+// is denied. This is the core behaviour required by the OTP rate limiter.
 func TestLimiter_Allow_BlocksAfterMax(t *testing.T) {
 	const max = 3
 	now := time.Now()

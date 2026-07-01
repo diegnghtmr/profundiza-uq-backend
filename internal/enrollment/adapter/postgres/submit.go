@@ -1,5 +1,5 @@
 // Package postgres implements the enrollment Submitter port. The Submit method
-// is the canonical capacity transaction from TRD §10.2: it locks the target
+// is the canonical capacity transaction: it locks the target
 // offering group row (SELECT ... FOR UPDATE) so concurrent submissions cannot
 // classify against a stale seat count, guaranteeing no overbooking of direct
 // slots and a fair, server-generated arrival order.
@@ -41,9 +41,9 @@ func NewSubmitRepo(pool *pgxpool.Pool) *SubmitRepo {
 
 const uniqueViolation = "23505"
 
-// Submit performs the full submission transaction. Steps mirror TRD §10.2.
+// Submit performs the full submission transaction.
 func (r *SubmitRepo) Submit(ctx context.Context, in app.SubmitInput) (app.SubmittedRequest, error) {
-	// Idempotency fast-path (BR-013): a prior request with the same key wins.
+	// Idempotency fast-path: a prior request with the same key wins.
 	if existing, ok, err := r.findByIdempotencyKey(ctx, in); err != nil {
 		return app.SubmittedRequest{}, err
 	} else if ok {
@@ -91,7 +91,7 @@ func (r *SubmitRepo) Submit(ctx context.Context, in app.SubmitInput) (app.Submit
 	}
 
 	// 3. Active enrollment window for the semester and the student's shift
-	//    (BR-004). Submission is blocked outside an active window.
+	//    Submission is blocked outside an active window.
 	var windowID string
 	err = tx.QueryRow(ctx,
 		`SELECT id FROM enrollment_windows
@@ -108,7 +108,7 @@ func (r *SubmitRepo) Submit(ctx context.Context, in app.SubmitInput) (app.Submit
 		return app.SubmittedRequest{}, fmt.Errorf("check window: %w", err)
 	}
 
-	// 4. Per-semester active-request count (BR-001).
+	// 4. Per-semester active-request count.
 	var activeCount int
 	if err := tx.QueryRow(ctx,
 		`SELECT count(*) FROM enrollment_requests
@@ -171,7 +171,7 @@ func (r *SubmitRepo) Submit(ctx context.Context, in app.SubmitInput) (app.Submit
 		return app.SubmittedRequest{}, fmt.Errorf("insert request: %w", err)
 	}
 
-	// 7. Audit + notification, atomic with the insert (BR-012, TRD §16.4).
+	// 7. Audit + notification, atomic with the insert.
 	if err := audit.Write(ctx, tx, audit.Event{
 		ActorType:  audit.ActorStudent,
 		ActorID:    in.StudentID,

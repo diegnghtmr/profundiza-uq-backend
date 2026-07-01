@@ -6,7 +6,7 @@ import (
 )
 
 // MaxElectivesPerSemester is the hard cap on professional electives a student
-// may hold or be accepted into within a single semester (BR-001 / BR-002).
+// may hold or be accepted into within a single semester.
 const MaxElectivesPerSemester = 4
 
 // minReasonLength mirrors the OpenAPI contract (reason minLength: 3).
@@ -33,7 +33,7 @@ const (
 	DecisionCapacityAdjustmentAcceptance DecisionType = "CAPACITY_ADJUSTMENT_ACCEPTANCE"
 )
 
-// ValidateSubmissionAllowed enforces BR-001: a student may not exceed the
+// ValidateSubmissionAllowed enforces the per-semester cap: a student may not exceed the
 // per-semester limit of active requests. activeCount is the number of the
 // student's currently active requests in the semester (cancelled/rejected
 // excluded).
@@ -44,7 +44,7 @@ func ValidateSubmissionAllowed(activeCount int) error {
 	return nil
 }
 
-// reasonIsValid trims whitespace and enforces the minimum length (BR-010).
+// reasonIsValid trims whitespace and enforces the minimum length.
 func reasonIsValid(reason string) bool {
 	return len(strings.TrimSpace(reason)) >= minReasonLength
 }
@@ -60,9 +60,8 @@ type DecisionContext struct {
 }
 
 // ApplyDecision validates an administrative decision against the domain rules
-// and returns the resulting request status. It enforces the mandatory reason
-// (BR-010), the no-overbooking rule (BR-007) and the maximum-accepted rule
-// (BR-002).
+// and returns the resulting request status. It enforces the mandatory
+// reason, the no-overbooking rule and the maximum-accepted rule.
 //
 // Fix #6 — ADMIN_CANCEL on ACCEPTED: DecisionAdminCancel is evaluated before
 // the general IsTerminal guard so that an admin can free a seat from an

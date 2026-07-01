@@ -1,5 +1,5 @@
 -- Profundiza UQ — initial schema.
--- Integrity rules (TRD §11) are enforced at the database level so that
+-- Integrity rules are enforced at the database level so that
 -- consistency does not depend on application code alone. Enum-like columns use
 -- TEXT + CHECK constraints (pragmatic: easy to evolve, sqlc-friendly).
 -- All timestamps are stored in UTC.
@@ -171,7 +171,7 @@ CREATE INDEX idx_academic_records_student ON student_academic_records (student_i
 -- Enrollment requests & decisions
 -- ---------------------------------------------------------------------------
 
--- Server-generated official arrival order (BR-003). A global monotonic sequence
+-- Server-generated official arrival order. A global monotonic sequence
 -- preserves order within any semester (a subsequence stays ordered).
 CREATE SEQUENCE enrollment_arrival_seq;
 
@@ -196,13 +196,13 @@ CREATE TABLE enrollment_requests (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Idempotency (BR-013): the same key for a student in a semester returns the
+-- Idempotency: the same key for a student in a semester returns the
 -- same request instead of duplicating it.
 CREATE UNIQUE INDEX uq_request_idempotency
     ON enrollment_requests (student_id, semester_id, idempotency_key);
 
 -- A student cannot hold two ACTIVE requests for the same group in a semester,
--- but cancelled/rejected history is preserved (TRD §11.2).
+-- but cancelled/rejected history is preserved.
 CREATE UNIQUE INDEX uq_active_request_per_group
     ON enrollment_requests (student_id, semester_id, offering_group_id)
     WHERE status IN ('SUBMITTED','PENDING_REVIEW','WAITLIST_SAME_SHIFT','WAITLIST_OPPOSITE_SHIFT','ACCEPTED');
@@ -289,7 +289,7 @@ CREATE TABLE global_settings (
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Append-only audit events (BR-012, TRD §11.3).
+-- Append-only audit events.
 CREATE TABLE audit_events (
     id                 BIGSERIAL PRIMARY KEY,
     actor_type         TEXT NOT NULL,

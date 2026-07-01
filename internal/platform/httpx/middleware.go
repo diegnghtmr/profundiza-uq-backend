@@ -53,7 +53,7 @@ func (s *statusRecorder) WriteHeader(code int) {
 }
 
 // RequestLogger emits one structured log line per request. Sensitive payloads
-// are never logged (TRD §17.1).
+// are never logged.
 func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -1,10 +1,10 @@
 # Profundiza UQ — Backend
 
-Go modular monolith (pragmatic Hexagonal Architecture) for the professional-elective enrollment system. Implements the consistency-critical core: server-generated arrival order, per-group capacity with row-level locking, and the priority classification rules from the PRD/TRD.
+Go modular monolith (pragmatic Hexagonal Architecture) for the professional-elective enrollment system. Implements the consistency-critical core: server-generated arrival order, per-group capacity with row-level locking, and the priority classification rules.
 
 ## Stack
 
-Go 1.26 · chi · pgx · PostgreSQL · embedded SQL migrations · `log/slog` structured logging. (sqlc / OpenTelemetry are planned per the TRD; current queries are hand-written pgx.)
+Go 1.26 · chi · pgx · PostgreSQL · embedded SQL migrations · `log/slog` structured logging. (sqlc / OpenTelemetry are planned; current queries are hand-written pgx.)
 
 ## Architecture
 
@@ -15,7 +15,7 @@ internal/
   enrollment/
     domain              PURE rules: Classify, ApplyDecision, max-electives, status/priority enums (unit-tested)
     app                 use cases + ports (Submitter)
-    adapter/postgres    transactional submit — SELECT ... FOR UPDATE (TRD §10.2)
+    adapter/postgres    transactional submit — SELECT ... FOR UPDATE
   semester/
     domain | app | adapter/{postgres,http}   full vertical slice (reference for new modules)
   platform/
@@ -71,7 +71,7 @@ go test ./...                  # pure domain unit tests (no DB needed)
 TEST_DATABASE_URL="postgres://postgres:postgres@localhost:5432/profundiza_uq_test?sslmode=disable" go test ./...
 ```
 
-The headline test, `TestSubmit_NoOverbookingUnderConcurrency`, fires 25 concurrent same-shift submissions at a capacity-1 group and asserts exactly one direct seat and a fair, unique arrival order — the PRD's #1 risk (RNF-001, no overbooking).
+The headline test, `TestSubmit_NoOverbookingUnderConcurrency`, fires 25 concurrent same-shift submissions at a capacity-1 group and asserts exactly one direct seat and a fair, unique arrival order — the #1 risk (no overbooking).
 
 ## Modules
 
@@ -90,7 +90,7 @@ All modules follow `adapter -> app -> domain` and are wired in `cmd/api/main.go`
 | `student` | `GET/POST /students`, `GET/PATCH /students/{id}`, `/students/import`, academic records |
 | `adminuser` | `GET/POST /admin/users`, `PATCH /admin/users/{id}` (super-admin) |
 | `settings` | `GET /admin/global-settings`, `PUT /admin/global-settings/{key}` (super-admin) |
-| `audit` | `GET /audit-events` (read); `internal/shared/audit` writes append-only events inside each mutation tx (BR-012) |
+| `audit` | `GET /audit-events` (read); `internal/shared/audit` writes append-only events inside each mutation tx |
 
 **Cross-cutting:** every state change writes an `audit_events` row and enqueues notifications in the same transaction; concurrency is protected by row locks; migrations are guarded by a `pg_advisory_lock`.
 

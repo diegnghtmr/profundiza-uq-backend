@@ -120,7 +120,7 @@ func run(logger *slog.Logger) error {
 		identitysystem.Clock{},
 		identitysystem.Codes{},
 	)
-	// Fix C (TRD §21): rate-limit OTP login endpoints per client IP.
+	// Rate-limit OTP login endpoints per client IP.
 	// 20 requests per minute is generous for legitimate use (manual login flow)
 	// yet tight enough to deter automated OTP enumeration.
 	authRateLimiter := ratelimit.New(20, time.Minute, nil)
@@ -143,7 +143,7 @@ func run(logger *slog.Logger) error {
 	notificationHandler := notifhttp.NewHandler(notifapp.NewService(notifpg.NewRepo(pool)))
 	notificationWorker := notification.NewWorker(pool, notifemail.NewSMTPSender(cfg.SMTPAddr, cfg.MailFrom), logger, 5*time.Second)
 
-	// Wire the reporting module (async XLSX/PDF report exports, TRD §15).
+	// Wire the reporting module (async XLSX/PDF report exports).
 	reportingRepo := reportingpg.NewRepo(pool)
 	reportingHandler := reportinghttp.NewHandler(reportingapp.NewService(reportingRepo))
 	reportingGen := reportingfile.NewGenerator(reportingfile.NewPostgresData(pool), cfg.ReportsOutputDir)
@@ -180,7 +180,7 @@ func run(logger *slog.Logger) error {
 		// Authenticated routes.
 		api.Group(func(secured chi.Router) {
 			secured.Use(authn.RequireAuth)
-			// Fix B (TRD §21): enforce CSRF token on all state-changing
+			// Enforce CSRF token on all state-changing
 			// (POST/PUT/PATCH/DELETE) requests in the authenticated group.
 			// GET/HEAD/OPTIONS and the public /auth/* routes are exempt.
 			secured.Use(authn.RequireCSRF)

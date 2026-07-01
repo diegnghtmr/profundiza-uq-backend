@@ -81,7 +81,7 @@ func (s *EnrollmentService) Submit(ctx context.Context, in SubmitInput) (Submitt
 // rejected with ErrMaxElectivesReached before any row is inserted. This makes
 // the common failure case deterministic and all-or-nothing.
 //
-// Individual items are still committed in their own transactions (TRD §10.2),
+// Individual items are still committed in their own transactions,
 // so uncommon per-item failures (ErrWindowClosed, etc.) may still produce
 // partial commits. The pre-check eliminates partial commits for the cap-breach
 // case, which is the most confusing one for students.
@@ -95,7 +95,7 @@ func (s *EnrollmentService) SubmitBatch(ctx context.Context, semesterID, student
 		seen[gid] = struct{}{}
 	}
 
-	// (b) Pre-validate against the per-semester cap (BR-001). Read the student's
+	// (b) Pre-validate against the per-semester cap. Read the student's
 	// existing active requests and fail the whole batch now — before committing
 	// anything — when adding all items would exceed the limit.
 	views, err := s.store.ListMine(ctx, studentID, semesterID)
@@ -138,7 +138,7 @@ func (s *EnrollmentService) SubmitBatch(ctx context.Context, semesterID, student
 	return out, nil
 }
 
-// Cancel cancels the student's own request (BR-005: the position is lost).
+// Cancel cancels the student's own request (the position is lost).
 func (s *EnrollmentService) Cancel(ctx context.Context, in CancelInput) (RequestView, error) {
 	return s.store.Cancel(ctx, in)
 }

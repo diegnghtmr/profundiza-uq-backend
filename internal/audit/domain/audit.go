@@ -1,5 +1,5 @@
 // Package domain models the read side of the append-only audit trail. Audit
-// events are written by every state-changing operation (BR-012, TRD §11.3);
+// events are written by every state-changing operation;
 // this module only reads them. It must not depend on HTTP, SQL, or any framework.
 package domain
 

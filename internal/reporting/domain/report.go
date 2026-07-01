@@ -1,6 +1,6 @@
 // Package domain models the reporting bounded context: asynchronous report
 // exports (XLSX / PDF) requested by administrators and produced by a background
-// worker (TRD §15).
+// worker.
 package domain
 
 import (

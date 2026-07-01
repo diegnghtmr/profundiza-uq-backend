@@ -148,7 +148,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// Asynchronous: the worker generates the file later (TRD §15).
+	// Asynchronous: the worker generates the file later.
 	httpx.WriteJSON(w, http.StatusAccepted, toDTO(export))
 }
 

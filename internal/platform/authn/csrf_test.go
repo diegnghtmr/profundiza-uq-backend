@@ -15,7 +15,7 @@ var passHandler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) 
 
 // TestRequireCSRF_POST_WithoutToken_Returns403 proves that a state-changing
 // (POST) request from an authenticated principal without the X-CSRF-Token
-// header is rejected with 403 Forbidden (Fix B, TRD §21).
+// header is rejected with 403 Forbidden.
 func TestRequireCSRF_POST_WithoutToken_Returns403(t *testing.T) {
 	handler := authn.RequireCSRF(passHandler)
 	p := &authn.Principal{

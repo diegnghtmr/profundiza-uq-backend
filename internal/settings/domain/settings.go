@@ -10,7 +10,7 @@ import (
 )
 
 // MinReasonLength is the minimum length of the mandatory change reason
-// (OpenAPI UpdateGlobalSettingRequest.reason, BR-012).
+// (OpenAPI UpdateGlobalSettingRequest.reason).
 const MinReasonLength = 3
 
 // GlobalSetting is a single configuration key with its JSON value.
@@ -38,7 +38,7 @@ type UpsertSetting struct {
 }
 
 // Validate enforces the upsert invariants. The value must be valid, non-null
-// JSON and the reason must be present (BR-012).
+// JSON and the reason must be present.
 func (u UpsertSetting) Validate() error {
 	if strings.TrimSpace(u.Key) == "" {
 		return ValidationError{Field: "settingKey", Message: "setting key is required"}

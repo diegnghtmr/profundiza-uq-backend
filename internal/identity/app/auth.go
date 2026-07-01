@@ -134,7 +134,7 @@ func (s *AuthService) StartLogin(ctx context.Context, rawEmail string) (StartRes
 		return res, nil
 	}
 
-	// Fix C (TRD §21): if there is already a live, unconsumed challenge for this
+	// If there is already a live, unconsumed challenge for this
 	// email, reuse it instead of minting a fresh one. Without this guard an
 	// attacker can call /start repeatedly to reset the per-challenge attempt cap
 	// (maxOTPAttempts), effectively bypassing brute-force protection. Reusing
@@ -229,7 +229,7 @@ func (s *AuthService) Authenticate(ctx context.Context, sessionID string) (*auth
 		return nil, ErrNoSession
 	}
 
-	// Fix A (TRD §21): re-validate that the underlying account is still ACTIVE
+	// Re-validate that the underlying account is still ACTIVE
 	// on every authenticated request. Without this check a deactivated admin
 	// retains full API access for the remainder of the session TTL (~12 h).
 	//

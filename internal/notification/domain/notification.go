@@ -1,10 +1,10 @@
 // Package domain models notifications: delivery state is kept separate from the
-// in-app read state (TRD §16.3).
+// in-app read state.
 package domain
 
 import "time"
 
-// Notification types (TRD §16.1).
+// Notification types.
 const (
 	TypeRequestSubmitted          = "REQUEST_SUBMITTED"
 	TypeRequestCancelledByStudent = "REQUEST_CANCELLED_BY_STUDENT"

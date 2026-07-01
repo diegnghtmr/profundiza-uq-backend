@@ -1,6 +1,6 @@
 // Package notification provides the database-backed outbox. Enqueue inserts
 // PENDING notification rows inside the caller's transaction so that a business
-// state change and the notifications it triggers commit atomically (TRD §16.4).
+// state change and the notifications it triggers commit atomically.
 package notification
 
 import (

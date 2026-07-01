@@ -1,6 +1,6 @@
 // Package audit provides an append-only audit writer usable inside a
-// transaction, so a state change and its audit record commit atomically
-// (BR-012). It is intentionally tiny and dependency-light.
+// transaction, so a state change and its audit record commit atomically.
+// It is intentionally tiny and dependency-light.
 package audit
 
 import (

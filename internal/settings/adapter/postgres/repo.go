@@ -1,6 +1,6 @@
 // Package postgres is the driven adapter implementing the global-settings
 // Repository port with pgx. Every upsert writes an audit event inside the same
-// transaction (BR-012).
+// transaction.
 package postgres
 
 import (
@@ -53,7 +53,7 @@ func (r *Repo) List(ctx context.Context, f app.ListFilter) ([]domain.GlobalSetti
 }
 
 // Upsert inserts or updates a setting and writes its audit event atomically.
-// The change reason is recorded on the audit event (BR-012).
+// The change reason is recorded on the audit event.
 func (r *Repo) Upsert(ctx context.Context, in domain.UpsertSetting, actor app.Actor) (domain.GlobalSetting, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {

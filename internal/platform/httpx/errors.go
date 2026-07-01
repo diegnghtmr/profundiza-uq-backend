@@ -7,7 +7,7 @@ import (
 	"net/http"
 )
 
-// APIError is the canonical error envelope (TRD §12.4):
+// APIError is the canonical error envelope:
 //
 //	{ "code": "...", "message": "...", "details": {}, "traceId": "..." }
 type APIError struct {

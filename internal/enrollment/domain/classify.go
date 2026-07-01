@@ -24,7 +24,7 @@ func (o GroupOccupancy) HasDirectRoom() bool {
 }
 
 // Classify decides the priority group and the initial status of a NEW request,
-// implementing BR-006/007/008/009:
+// implementing the priority-classification rules:
 //
 //   - Opposite-shift requests are always last priority and go to the
 //     opposite-shift waitlist, regardless of available room.

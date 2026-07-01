@@ -2,7 +2,7 @@
 // HTTP middleware that applies it per client IP address. It is intentionally
 // dependency-free: no external packages required beyond the standard library.
 //
-// Design notes (Fix C — TRD §21):
+// Design notes:
 //   - Fixed-window per IP so each window is independent and trivially testable.
 //   - The clock is injectable so tests can run without sleeping.
 //   - Client IP is taken from r.RemoteAddr only. X-Forwarded-For is NOT trusted

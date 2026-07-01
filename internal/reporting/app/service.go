@@ -62,8 +62,7 @@ func NewService(repo Repository) *Service {
 }
 
 // Create validates and persists a new report export in REQUESTED state. The
-// background worker picks it up asynchronously; this call returns immediately
-// (TRD §15).
+// background worker picks it up asynchronously; this call returns immediately.
 func (s *Service) Create(ctx context.Context, req CreateRequest) (domain.ReportExport, error) {
 	filters := req.Filters
 	if filters == nil {

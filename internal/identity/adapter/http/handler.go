@@ -23,7 +23,7 @@ type Handler struct {
 	sessionTTL   time.Duration
 	logger       *slog.Logger
 	// loginLimiter gates /login/start and /login/verify per client IP
-	// (Fix C, TRD §21). Nil means no rate limiting (useful in tests).
+	// Nil means no rate limiting (useful in tests).
 	loginLimiter *ratelimit.Limiter
 }
 
@@ -37,7 +37,7 @@ func NewHandler(svc *app.AuthService, cookieSecure bool, sessionTTL time.Duratio
 // AuthRoutes returns the router mounted at /auth.
 func (h *Handler) AuthRoutes() chi.Router {
 	r := chi.NewRouter()
-	// Fix C (TRD §21): rate-limit /login/start and /login/verify per IP.
+	// Rate-limit /login/start and /login/verify per IP.
 	// /logout is intentionally excluded — it carries no brute-force risk.
 	if h.loginLimiter != nil {
 		limiterMiddleware := ratelimit.IPMiddleware(h.loginLimiter)
@@ -63,7 +63,7 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusUnauthorized, httpx.CodeUnauthorized, "Session is no longer valid.", nil)
 		return
 	}
-	// Fix B (TRD §21): include the CSRF token so the SPA can read it on page
+	// Include the CSRF token so the SPA can read it on page
 	// load (GET /me is the typical bootstrap call) and send it back as the
 	// X-CSRF-Token header on subsequent state-changing requests.
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
@@ -111,7 +111,7 @@ func (h *Handler) verifyLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.setSessionCookie(w, sessionID)
-	// Fix B (TRD §21): return the CSRF token on login so the SPA can store it
+	// Return the CSRF token on login so the SPA can store it
 	// in memory and send it as X-CSRF-Token on subsequent state-changing calls.
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"user":      principalDTO(principal),

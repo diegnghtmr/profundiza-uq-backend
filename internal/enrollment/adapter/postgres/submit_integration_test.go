@@ -67,7 +67,7 @@ func seedGroup(t *testing.T, pool *pgxpool.Pool, capacity int) (semesterID, offe
 	mustScan(t, pool, &semesterID,
 		`INSERT INTO semesters(code,name,starts_at,ends_at,status)
 		 VALUES ($1,'test',now(),now()+interval '60 days','DRAFT') RETURNING id`, code)
-	// An active window is required for submissions (BR-004).
+	// An active window is required for submissions.
 	var windowID string
 	mustScan(t, pool, &windowID,
 		`INSERT INTO enrollment_windows(semester_id,name,starts_at,ends_at,status)
@@ -93,7 +93,7 @@ func seedStudent(t *testing.T, pool *pgxpool.Pool, shift string, n int) string {
 	return id
 }
 
-// TestSubmit_NoOverbookingUnderConcurrency is the critical RNF-001 test: with a
+// TestSubmit_NoOverbookingUnderConcurrency is the critical no-overbooking test: with a
 // single direct seat, many simultaneous same-shift submissions must yield
 // exactly one DIRECT/PENDING_REVIEW and the rest on the same-shift waitlist,
 // with unique arrival sequences. No overbooking, fair order.
@@ -152,7 +152,7 @@ func TestSubmit_NoOverbookingUnderConcurrency(t *testing.T) {
 	}
 }
 
-// TestSubmit_IsIdempotent verifies BR-013: replaying the same key returns the
+// TestSubmit_IsIdempotent verifies idempotency: replaying the same key returns the
 // original request without creating a duplicate.
 func TestSubmit_IsIdempotent(t *testing.T) {
 	pool := testPool(t)
@@ -201,7 +201,7 @@ func TestSubmit_DuplicateActiveRequestRejected(t *testing.T) {
 	}
 }
 
-// TestSubmit_OppositeShiftGoesLast verifies BR-009: an opposite-shift student is
+// TestSubmit_OppositeShiftGoesLast verifies the opposite-shift rule: an opposite-shift student is
 // always classified into the opposite-shift waitlist even with free seats.
 func TestSubmit_OppositeShiftGoesLast(t *testing.T) {
 	pool := testPool(t)
@@ -224,7 +224,7 @@ func TestSubmit_OppositeShiftGoesLast(t *testing.T) {
 	}
 }
 
-// TestSubmit_BlockedOutsideWindow verifies BR-004 / CA-002: with no active
+// TestSubmit_BlockedOutsideWindow verifies the active-window rule: with no active
 // enrollment window, submission is rejected.
 func TestSubmit_BlockedOutsideWindow(t *testing.T) {
 	pool := testPool(t)
@@ -249,7 +249,7 @@ func TestSubmit_BlockedOutsideWindow(t *testing.T) {
 	}
 }
 
-// TestSubmit_StudentCapNotExceededUnderConcurrency is the BR-001 concurrency
+// TestSubmit_StudentCapNotExceededUnderConcurrency is the per-semester cap concurrency
 // test: a student who already holds 3 active requests fires 4 concurrent
 // submissions to 4 distinct groups in the same semester. Exactly 1 must
 // succeed (filling the 4th slot) and the other 3 must fail with
@@ -259,7 +259,7 @@ func TestSubmit_StudentCapNotExceededUnderConcurrency(t *testing.T) {
 	pool := testPool(t)
 	repo := enrollpg.NewSubmitRepo(pool)
 
-	// All 4 extra groups share the same semester so BR-001 counts across them.
+	// All 4 extra groups share the same semester so the per-semester cap counts across them.
 	semesterID, _, firstGroupID := seedGroup(t, pool, 10)
 
 	// Pre-seed 3 active requests for the student in the same semester to 3
@@ -354,10 +354,10 @@ func TestSubmit_StudentCapNotExceededUnderConcurrency(t *testing.T) {
 		t.Fatalf("got %d unexpected errors (not ErrMaxElectivesReached)", otherErrors)
 	}
 	if successes != 1 {
-		t.Errorf("BR-001 concurrency: expected exactly 1 success, got %d (cap exceeded)", successes)
+		t.Errorf("per-semester cap concurrency: expected exactly 1 success, got %d (cap exceeded)", successes)
 	}
 	if capErrors != racers-1 {
-		t.Errorf("BR-001 concurrency: expected %d ErrMaxElectivesReached, got %d", racers-1, capErrors)
+		t.Errorf("per-semester cap concurrency: expected %d ErrMaxElectivesReached, got %d", racers-1, capErrors)
 	}
 }
 

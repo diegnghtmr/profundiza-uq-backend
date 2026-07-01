@@ -128,7 +128,7 @@ LIMIT $` + itoa(limitArg) + ` OFFSET $` + itoa(offsetArg)
 	return items, total, rows.Err()
 }
 
-// warningsFor surfaces administrative warnings for a queue item (PRD §16.2).
+// warningsFor surfaces administrative warnings for a queue item.
 func warningsFor(it app.QueueItem, studentAccepted int) []string {
 	var w []string
 	if it.Student.CompletedCount+studentAccepted >= domain.MaxElectivesPerSemester {

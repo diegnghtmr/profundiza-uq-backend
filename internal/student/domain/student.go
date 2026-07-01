@@ -65,7 +65,7 @@ type NewStudent struct {
 	CompletedProfessionalElectivesCount int
 }
 
-// Validate enforces the create invariants (TRD §9, OpenAPI CreateStudentRequest).
+// Validate enforces the create invariants (OpenAPI CreateStudentRequest).
 func (n NewStudent) Validate() error {
 	if strings.TrimSpace(n.InstitutionalEmail) == "" || !strings.Contains(n.InstitutionalEmail, "@") {
 		return ValidationError{Field: "institutionalEmail", Message: "a valid institutional email is required"}

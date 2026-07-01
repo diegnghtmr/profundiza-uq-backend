@@ -1,6 +1,6 @@
 // Package postgres is the driven adapter implementing the admin-user Repository
 // port with pgx. Every state-changing operation writes an audit event inside
-// the same transaction (BR-012).
+// the same transaction.
 package postgres
 
 import (

@@ -22,7 +22,7 @@ const (
 	maxPageSize     = 100
 )
 
-// Actor is the principal performing a state-changing operation (for audit, BR-012).
+// Actor is the principal performing a state-changing operation (for audit).
 type Actor struct {
 	Type string // STUDENT | ADMIN | SYSTEM
 	ID   string // empty => NULL actor

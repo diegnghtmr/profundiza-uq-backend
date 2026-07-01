@@ -91,7 +91,7 @@ func FromContext(ctx context.Context) *Principal {
 func Middleware(a Authenticator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Capture client IP and User-Agent for audit context (BR-012).
+			// Capture client IP and User-Agent for audit context.
 			ip := r.RemoteAddr
 			if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 				ip = host
@@ -124,7 +124,7 @@ func RequireAuth(next http.Handler) http.Handler {
 // HTTP methods (POST, PUT, PATCH, DELETE) on authenticated routes.
 //
 // The CSRF token is generated at login time, stored in the session, and
-// returned to the SPA in the login-verify and /me responses (Fix B, TRD §21).
+// returned to the SPA in the login-verify and /me responses.
 // The SPA must send the token back in the X-CSRF-Token header on every
 // state-changing request.
 //

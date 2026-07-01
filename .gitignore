@@ -1,0 +1,12 @@
+# Report files written at runtime by the reporting worker
+reports-output/
+
+# Compiled binaries / test artifacts
+/api
+*.out
+*.test
+
+# Local env files and OS cruft
+.env
+*.local
+.DS_Store

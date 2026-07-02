@@ -18,6 +18,21 @@ type Sender interface {
 // times, instead of retrying forever.
 const maxDeliveryAttempts = 5
 
+// leaseThreshold bounds how long a row may stay in the transient SENDING
+// status before the reaper (see reapStuckSending) assumes the worker that
+// claimed it died mid-send (crash, OOM, redeploy) and resets it back to
+// PENDING. It must stay safely above the longest a single send can take —
+// smtpx.DefaultTimeout is 10s, so 60s leaves ample margin — so a row that is
+// genuinely still in flight in a live worker is never reaped out from under
+// it.
+//
+// This assumes a single worker replica in steady state. With N replicas the
+// lease still bounds the maximum stuck window per crash (at most
+// leaseThreshold before another worker reclaims the row); it does not make
+// concurrent reapers linearizable, but the worst case is a benign re-claim
+// racing a live send's own terminal update, not permanent notification loss.
+const leaseThreshold = 60 * time.Second
+
 // Worker drains the email outbox: it claims PENDING EMAIL notifications,
 // sends them, and records the delivery outcome. Multiple workers are safe —
 // claiming uses FOR UPDATE SKIP LOCKED.
@@ -70,17 +85,45 @@ type job struct {
 	attempts int
 }
 
-// drain claims a batch of pending rows and delivers each one. Delivery
-// happens after claiming has committed and released its connection, so a
-// stalled send only ties up the goroutine running drain, not a pooled DB
-// connection.
+// drain reaps any rows stuck in SENDING past their lease, claims a batch of
+// pending rows, and delivers each one. Delivery happens after claiming has
+// committed and released its connection, so a stalled send only ties up the
+// goroutine running drain, not a pooled DB connection.
 func (w *Worker) drain(ctx context.Context) error {
+	if err := w.reapStuckSending(ctx); err != nil {
+		return err
+	}
+
 	jobs, err := w.claim(ctx)
 	if err != nil {
 		return err
 	}
 	for _, j := range jobs {
 		w.deliver(ctx, j)
+	}
+	return nil
+}
+
+// reapStuckSending resets rows that have been sitting in SENDING for longer
+// than leaseThreshold back to PENDING, clearing claimed_at. A row only stays
+// in SENDING between claim() committing and deliver() recording a terminal
+// outcome (SENT/PENDING-retry/FAILED); if the process dies in that window
+// (crash, OOM, redeploy — exactly the failure mode a stalled SMTP relay can
+// trigger) the row would otherwise be claimed but never retried, since
+// claim() only selects PENDING rows. Resetting it back to PENDING here makes
+// it claimable again instead of silently lost.
+func (w *Worker) reapStuckSending(ctx context.Context) error {
+	cutoff := time.Now().Add(-leaseThreshold)
+	tag, err := w.pool.Exec(ctx,
+		`UPDATE notifications
+		    SET delivery_status = 'PENDING', claimed_at = NULL
+		  WHERE channel = 'EMAIL' AND delivery_status = 'SENDING' AND claimed_at < $1`,
+		cutoff)
+	if err != nil {
+		return err
+	}
+	if n := tag.RowsAffected(); n > 0 {
+		w.logger.WarnContext(ctx, "notification_stuck_sending_reaped", slog.Int64("count", n))
 	}
 	return nil
 }
@@ -123,7 +166,8 @@ func (w *Worker) claim(ctx context.Context) ([]job, error) {
 	}
 
 	for _, j := range jobs {
-		if _, err := tx.Exec(ctx, `UPDATE notifications SET delivery_status='SENDING' WHERE id=$1`, j.id); err != nil {
+		if _, err := tx.Exec(ctx,
+			`UPDATE notifications SET delivery_status='SENDING', claimed_at=now() WHERE id=$1`, j.id); err != nil {
 			return nil, err
 		}
 	}
@@ -146,7 +190,7 @@ func (w *Worker) deliver(ctx context.Context, j job) {
 	sendErr := w.sender.Send(ctx, j.to, j.subject, j.body)
 	if sendErr == nil {
 		if _, err := w.pool.Exec(ctx,
-			`UPDATE notifications SET delivery_status='SENT', sent_at=$2 WHERE id=$1`, j.id, now); err != nil {
+			`UPDATE notifications SET delivery_status='SENT', sent_at=$2, claimed_at=NULL WHERE id=$1`, j.id, now); err != nil {
 			w.logger.ErrorContext(ctx, "notification_mark_sent_failed", slog.String("id", j.id), slog.Any("error", err))
 		}
 		return
@@ -155,7 +199,7 @@ func (w *Worker) deliver(ctx context.Context, j job) {
 	attempts := j.attempts + 1
 	if attempts >= maxDeliveryAttempts {
 		if _, err := w.pool.Exec(ctx,
-			`UPDATE notifications SET delivery_status='FAILED', failed_at=$2, failure_reason=$3, attempt_count=$4 WHERE id=$1`,
+			`UPDATE notifications SET delivery_status='FAILED', failed_at=$2, failure_reason=$3, attempt_count=$4, claimed_at=NULL WHERE id=$1`,
 			j.id, now, sendErr.Error(), attempts); err != nil {
 			w.logger.ErrorContext(ctx, "notification_mark_failed_failed", slog.String("id", j.id), slog.Any("error", err))
 		}
@@ -166,7 +210,7 @@ func (w *Worker) deliver(ctx context.Context, j job) {
 
 	next := now.Add(retryBackoff(attempts))
 	if _, err := w.pool.Exec(ctx,
-		`UPDATE notifications SET delivery_status='PENDING', attempt_count=$2, failure_reason=$3, next_attempt_at=$4 WHERE id=$1`,
+		`UPDATE notifications SET delivery_status='PENDING', attempt_count=$2, failure_reason=$3, next_attempt_at=$4, claimed_at=NULL WHERE id=$1`,
 		j.id, attempts, sendErr.Error(), next); err != nil {
 		w.logger.ErrorContext(ctx, "notification_mark_retry_failed", slog.String("id", j.id), slog.Any("error", err))
 	}
@@ -191,4 +235,13 @@ func retryBackoff(attempt int) time.Duration {
 		return maxBackoff
 	}
 	return d
+}
+
+// isLeaseExpired reports whether a row claimed at claimedAt is eligible for
+// reapStuckSending to reset back to PENDING, i.e. whether its SENDING lease
+// has run out as of now. It mirrors reapStuckSending's SQL condition
+// (claimed_at < now - leaseThreshold) and is the pure decision at the heart
+// of the reaper, factored out so it is unit-testable without a database.
+func isLeaseExpired(claimedAt, now time.Time) bool {
+	return now.Sub(claimedAt) > leaseThreshold
 }

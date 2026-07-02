@@ -32,3 +32,35 @@ func TestRetryBackoff(t *testing.T) {
 		})
 	}
 }
+
+// TestIsLeaseExpired proves the reaper's core decision: a row claimed
+// (flipped to SENDING) more than leaseThreshold ago is eligible to be reset
+// back to PENDING, while a row still within its lease — including one
+// genuinely in flight in a live worker — is left alone. This is the pure
+// piece of the stuck-SENDING reaper that is unit-testable without a
+// database; reapStuckSending's SQL itself (UPDATE ... WHERE
+// delivery_status='SENDING' AND claimed_at < $1) is integration-only and was
+// not exercised here since no DB is available in this environment.
+func TestIsLeaseExpired(t *testing.T) {
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name      string
+		claimedAt time.Time
+		want      bool
+	}{
+		{"just claimed", now, false},
+		{"well within the lease (10s, a live send in flight)", now.Add(-10 * time.Second), false},
+		{"exactly at the lease threshold (not yet expired)", now.Add(-leaseThreshold), false},
+		{"one second past the lease threshold", now.Add(-leaseThreshold - time.Second), true},
+		{"long stuck (claimed an hour ago, worker likely crashed)", now.Add(-time.Hour), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isLeaseExpired(tt.claimedAt, now)
+			if got != tt.want {
+				t.Fatalf("isLeaseExpired(claimedAt=%v, now=%v) = %v, want %v", tt.claimedAt, now, got, tt.want)
+			}
+		})
+	}
+}

@@ -13,9 +13,22 @@ type Sender interface {
 	Send(ctx context.Context, to, subject, body string) error
 }
 
-// Worker drains the email outbox: it claims PENDING EMAIL notifications, sends
-// them, and records the delivery outcome. Multiple workers are safe — claiming
-// uses FOR UPDATE SKIP LOCKED.
+// maxDeliveryAttempts bounds retries for a transient send failure. A row is
+// moved to the terminal FAILED status once it has been attempted this many
+// times, instead of retrying forever.
+const maxDeliveryAttempts = 5
+
+// Worker drains the email outbox: it claims PENDING EMAIL notifications,
+// sends them, and records the delivery outcome. Multiple workers are safe —
+// claiming uses FOR UPDATE SKIP LOCKED.
+//
+// Claiming a row and sending its email are deliberately split into two
+// separate, short database statements (see claim and deliver) instead of
+// sending while a claiming transaction is open. FOR UPDATE SKIP LOCKED holds
+// row locks and a pooled connection for as long as the transaction stays
+// open; doing the SMTP send inside that transaction would let a stalled
+// relay stall the transaction, starving the connection pool for every other
+// request path (submit, decide, everything) and blocking graceful shutdown.
 type Worker struct {
 	pool     *pgxpool.Pool
 	sender   Sender
@@ -48,55 +61,134 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
-// drain processes one batch of pending email notifications.
+// job is one claimed outbox row.
+type job struct {
+	id       string
+	to       string
+	subject  string
+	body     string
+	attempts int
+}
+
+// drain claims a batch of pending rows and delivers each one. Delivery
+// happens after claiming has committed and released its connection, so a
+// stalled send only ties up the goroutine running drain, not a pooled DB
+// connection.
 func (w *Worker) drain(ctx context.Context) error {
-	tx, err := w.pool.Begin(ctx)
+	jobs, err := w.claim(ctx)
 	if err != nil {
 		return err
+	}
+	for _, j := range jobs {
+		w.deliver(ctx, j)
+	}
+	return nil
+}
+
+// claim opens a short transaction, selects up to batch eligible PENDING rows
+// with FOR UPDATE SKIP LOCKED, flips them to SENDING so no other worker
+// re-claims them while delivery is in flight, and commits — releasing the
+// connection before any SMTP I/O happens.
+func (w *Worker) claim(ctx context.Context) ([]job, error) {
+	tx, err := w.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	rows, err := tx.Query(ctx,
-		`SELECT id, recipient_email, subject, body
+		`SELECT id, recipient_email, subject, body, attempt_count
 		   FROM notifications
 		  WHERE channel = 'EMAIL' AND delivery_status = 'PENDING'
+		    AND (next_attempt_at IS NULL OR next_attempt_at <= now())
 		  ORDER BY created_at
 		  LIMIT $1
 		  FOR UPDATE SKIP LOCKED`, w.batch)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	type job struct{ id, to, subject, body string }
 	var jobs []job
 	for rows.Next() {
 		var j job
-		if err := rows.Scan(&j.id, &j.to, &j.subject, &j.body); err != nil {
+		if err := rows.Scan(&j.id, &j.to, &j.subject, &j.body, &j.attempts); err != nil {
 			rows.Close()
-			return err
+			return nil, err
 		}
 		jobs = append(jobs, j)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return err
+		return nil, err
 	}
 
-	now := time.Now()
 	for _, j := range jobs {
-		if err := w.sender.Send(ctx, j.to, j.subject, j.body); err != nil {
-			if _, e := tx.Exec(ctx,
-				`UPDATE notifications SET delivery_status='FAILED', failed_at=$2, failure_reason=$3 WHERE id=$1`,
-				j.id, now, err.Error()); e != nil {
-				return e
-			}
-			w.logger.WarnContext(ctx, "notification_delivery_failed", slog.String("id", j.id), slog.Any("error", err))
-			continue
-		}
-		if _, e := tx.Exec(ctx,
-			`UPDATE notifications SET delivery_status='SENT', sent_at=$2 WHERE id=$1`, j.id, now); e != nil {
-			return e
+		if _, err := tx.Exec(ctx, `UPDATE notifications SET delivery_status='SENDING' WHERE id=$1`, j.id); err != nil {
+			return nil, err
 		}
 	}
-	return tx.Commit(ctx)
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return jobs, nil
+}
+
+// deliver sends one claimed job's email (outside any DB transaction) and
+// records the outcome in a single follow-up statement — a lone Exec is
+// already atomic, so no explicit transaction is needed and the pooled
+// connection is only held for that one short statement.
+//
+// A transient send failure is retried with backoff (see retryBackoff)
+// instead of being marked terminally FAILED, up to maxDeliveryAttempts.
+func (w *Worker) deliver(ctx context.Context, j job) {
+	now := time.Now()
+	sendErr := w.sender.Send(ctx, j.to, j.subject, j.body)
+	if sendErr == nil {
+		if _, err := w.pool.Exec(ctx,
+			`UPDATE notifications SET delivery_status='SENT', sent_at=$2 WHERE id=$1`, j.id, now); err != nil {
+			w.logger.ErrorContext(ctx, "notification_mark_sent_failed", slog.String("id", j.id), slog.Any("error", err))
+		}
+		return
+	}
+
+	attempts := j.attempts + 1
+	if attempts >= maxDeliveryAttempts {
+		if _, err := w.pool.Exec(ctx,
+			`UPDATE notifications SET delivery_status='FAILED', failed_at=$2, failure_reason=$3, attempt_count=$4 WHERE id=$1`,
+			j.id, now, sendErr.Error(), attempts); err != nil {
+			w.logger.ErrorContext(ctx, "notification_mark_failed_failed", slog.String("id", j.id), slog.Any("error", err))
+		}
+		w.logger.WarnContext(ctx, "notification_delivery_failed_terminal",
+			slog.String("id", j.id), slog.Int("attempts", attempts), slog.Any("error", sendErr))
+		return
+	}
+
+	next := now.Add(retryBackoff(attempts))
+	if _, err := w.pool.Exec(ctx,
+		`UPDATE notifications SET delivery_status='PENDING', attempt_count=$2, failure_reason=$3, next_attempt_at=$4 WHERE id=$1`,
+		j.id, attempts, sendErr.Error(), next); err != nil {
+		w.logger.ErrorContext(ctx, "notification_mark_retry_failed", slog.String("id", j.id), slog.Any("error", err))
+	}
+	w.logger.WarnContext(ctx, "notification_delivery_retry_scheduled",
+		slog.String("id", j.id), slog.Int("attempts", attempts), slog.Time("nextAttemptAt", next), slog.Any("error", sendErr))
+}
+
+// retryBackoff returns the delay before a failed row becomes claimable again,
+// given its 1-indexed attempt count: 30s, 60s, 120s, 240s, ... capped at 5
+// minutes so retries never drift arbitrarily far into the future.
+func retryBackoff(attempt int) time.Duration {
+	const base = 30 * time.Second
+	const maxBackoff = 5 * time.Minute
+	if attempt < 1 {
+		attempt = 1
+	}
+	if attempt > 10 { // guard against shift overflow for pathological inputs
+		return maxBackoff
+	}
+	d := base << uint(attempt-1)
+	if d <= 0 || d > maxBackoff {
+		return maxBackoff
+	}
+	return d
 }

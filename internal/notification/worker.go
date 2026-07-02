@@ -18,24 +18,38 @@ type Sender interface {
 // times, instead of retrying forever.
 const maxDeliveryAttempts = 5
 
-// leaseThreshold bounds how long a row may stay in the transient SENDING
-// status before the reaper (see reapStuckSending) assumes the worker that
-// claimed it died mid-send (crash, OOM, redeploy) and resets it back to
-// PENDING. It must stay safely above the longest a single send can take —
-// smtpx.DefaultTimeout is 10s, so 60s leaves ample margin — so a row that is
-// genuinely still in flight in a live worker is never reaped out from under
-// it.
+// leaseThreshold bounds how long a single row may stay in the transient
+// SENDING status before the reaper (see reapStuckSending) assumes the worker
+// that claimed it died mid-send (crash, OOM, redeploy) and resets it back to
+// PENDING. It must stay safely above the longest a single row's own send can
+// take — smtpx.DefaultTimeout is 10s, so 60s leaves ample margin — so a row
+// that is genuinely still in flight in a live worker is never reaped out
+// from under it.
 //
-// This assumes a single worker replica in steady state. With N replicas the
-// lease still bounds the maximum stuck window per crash (at most
-// leaseThreshold before another worker reclaims the row); it does not make
-// concurrent reapers linearizable, but the worst case is a benign re-claim
-// racing a live send's own terminal update, not permanent notification loss.
+// This is evaluated per row, not per batch: deliver() re-stamps claimed_at
+// immediately before sending each row (see deliver), so the lease reflects
+// when that specific row's send started rather than when the whole batch (up
+// to Worker.batch rows) was claimed. Without the per-row re-stamp, sequential
+// delivery of a large batch (each send bounded by smtpx.DefaultTimeout, so a
+// full batch can legitimately take minutes) could push a late row in the
+// batch past leaseThreshold while it is still queued behind earlier rows,
+// letting another replica's reaper reclaim and double-send it.
+//
+// With N worker replicas this, combined with the ownership guards in
+// deliver's terminal UPDATEs (WHERE delivery_status='SENDING' AND
+// claimed_at=$ownClaim), makes concurrent workers safe: a row can only be
+// finalized by the worker that currently holds its lease, and a reaped row
+// can only be re-claimed after its true owner has genuinely stopped sending
+// it for longer than leaseThreshold.
 const leaseThreshold = 60 * time.Second
 
 // Worker drains the email outbox: it claims PENDING EMAIL notifications,
-// sends them, and records the delivery outcome. Multiple workers are safe —
-// claiming uses FOR UPDATE SKIP LOCKED.
+// sends them, and records the delivery outcome. Multiple workers (replicas)
+// are safe: claiming uses FOR UPDATE SKIP LOCKED so two workers never claim
+// the same row, and delivery is protected by a per-row lease (claimed_at)
+// that deliver re-stamps immediately before sending and then requires as an
+// ownership token on every write for that row — see leaseThreshold and
+// deliver for how this prevents a double-send even after a reap.
 //
 // Claiming a row and sending its email are deliberately split into two
 // separate, short database statements (see claim and deliver) instead of
@@ -183,25 +197,61 @@ func (w *Worker) claim(ctx context.Context) ([]job, error) {
 // already atomic, so no explicit transaction is needed and the pooled
 // connection is only held for that one short statement.
 //
+// Before sending, deliver re-stamps claimed_at to "now" for this row alone
+// (see leaseThreshold) and uses that exact value as an ownership token: every
+// subsequent write for this row, including the terminal one, is guarded by
+// WHERE delivery_status='SENDING' AND claimed_at=$ownClaim. If another
+// replica's reaper has already reclaimed the row (because this worker sat on
+// it past leaseThreshold, or crashed), the re-stamp or the terminal update
+// affects zero rows and this call backs off instead of clobbering state that
+// another worker now owns — closing the multi-replica double-send/clobber
+// race.
+//
 // A transient send failure is retried with backoff (see retryBackoff)
 // instead of being marked terminally FAILED, up to maxDeliveryAttempts.
 func (w *Worker) deliver(ctx context.Context, j job) {
+	ownClaim := time.Now()
+	tag, err := w.pool.Exec(ctx,
+		`UPDATE notifications SET claimed_at=$2 WHERE id=$1 AND delivery_status='SENDING'`,
+		j.id, ownClaim)
+	if err != nil {
+		w.logger.ErrorContext(ctx, "notification_lease_restamp_failed", slog.String("id", j.id), slog.Any("error", err))
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		// Lost ownership before the send even started (already reaped and
+		// possibly re-claimed by another replica). Do not send — the new
+		// owner will.
+		w.logger.WarnContext(ctx, "notification_lease_lost_before_send", slog.String("id", j.id))
+		return
+	}
+
 	now := time.Now()
 	sendErr := w.sender.Send(ctx, j.to, j.subject, j.body)
 	if sendErr == nil {
-		if _, err := w.pool.Exec(ctx,
-			`UPDATE notifications SET delivery_status='SENT', sent_at=$2, claimed_at=NULL WHERE id=$1`, j.id, now); err != nil {
+		res, err := w.pool.Exec(ctx,
+			`UPDATE notifications SET delivery_status='SENT', sent_at=$2, claimed_at=NULL
+			  WHERE id=$1 AND delivery_status='SENDING' AND claimed_at=$3`, j.id, now, ownClaim)
+		if err != nil {
 			w.logger.ErrorContext(ctx, "notification_mark_sent_failed", slog.String("id", j.id), slog.Any("error", err))
+		} else if res.RowsAffected() == 0 {
+			w.logger.WarnContext(ctx, "notification_lease_lost_after_send",
+				slog.String("id", j.id), slog.String("outcome", "sent"))
 		}
 		return
 	}
 
 	attempts := j.attempts + 1
 	if attempts >= maxDeliveryAttempts {
-		if _, err := w.pool.Exec(ctx,
-			`UPDATE notifications SET delivery_status='FAILED', failed_at=$2, failure_reason=$3, attempt_count=$4, claimed_at=NULL WHERE id=$1`,
-			j.id, now, sendErr.Error(), attempts); err != nil {
+		res, err := w.pool.Exec(ctx,
+			`UPDATE notifications SET delivery_status='FAILED', failed_at=$2, failure_reason=$3, attempt_count=$4, claimed_at=NULL
+			  WHERE id=$1 AND delivery_status='SENDING' AND claimed_at=$5`,
+			j.id, now, sendErr.Error(), attempts, ownClaim)
+		if err != nil {
 			w.logger.ErrorContext(ctx, "notification_mark_failed_failed", slog.String("id", j.id), slog.Any("error", err))
+		} else if res.RowsAffected() == 0 {
+			w.logger.WarnContext(ctx, "notification_lease_lost_after_send",
+				slog.String("id", j.id), slog.String("outcome", "failed"))
 		}
 		w.logger.WarnContext(ctx, "notification_delivery_failed_terminal",
 			slog.String("id", j.id), slog.Int("attempts", attempts), slog.Any("error", sendErr))
@@ -209,10 +259,15 @@ func (w *Worker) deliver(ctx context.Context, j job) {
 	}
 
 	next := now.Add(retryBackoff(attempts))
-	if _, err := w.pool.Exec(ctx,
-		`UPDATE notifications SET delivery_status='PENDING', attempt_count=$2, failure_reason=$3, next_attempt_at=$4, claimed_at=NULL WHERE id=$1`,
-		j.id, attempts, sendErr.Error(), next); err != nil {
+	res, err := w.pool.Exec(ctx,
+		`UPDATE notifications SET delivery_status='PENDING', attempt_count=$2, failure_reason=$3, next_attempt_at=$4, claimed_at=NULL
+		  WHERE id=$1 AND delivery_status='SENDING' AND claimed_at=$5`,
+		j.id, attempts, sendErr.Error(), next, ownClaim)
+	if err != nil {
 		w.logger.ErrorContext(ctx, "notification_mark_retry_failed", slog.String("id", j.id), slog.Any("error", err))
+	} else if res.RowsAffected() == 0 {
+		w.logger.WarnContext(ctx, "notification_lease_lost_after_send",
+			slog.String("id", j.id), slog.String("outcome", "retry_scheduled"))
 	}
 	w.logger.WarnContext(ctx, "notification_delivery_retry_scheduled",
 		slog.String("id", j.id), slog.Int("attempts", attempts), slog.Time("nextAttemptAt", next), slog.Any("error", sendErr))

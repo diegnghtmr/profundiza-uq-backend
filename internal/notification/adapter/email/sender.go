@@ -5,7 +5,8 @@ package email
 import (
 	"context"
 	"fmt"
-	"net/smtp"
+
+	"github.com/uniquindio/profundiza-uq/internal/platform/smtpx"
 )
 
 // SMTPSender sends notification emails over SMTP.
@@ -20,12 +21,14 @@ func NewSMTPSender(addr, from string) *SMTPSender {
 	return &SMTPSender{addr: addr, from: from}
 }
 
-// Send delivers a plain-text email.
-func (s *SMTPSender) Send(_ context.Context, to, subject, body string) error {
+// Send delivers a plain-text email. The send is bounded by a hard timeout
+// derived from ctx (or a sane default) so a stalled/black-holed relay returns
+// an error instead of blocking the caller forever.
+func (s *SMTPSender) Send(ctx context.Context, to, subject, body string) error {
 	if s.addr == "" {
 		return nil
 	}
 	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n%s",
 		s.from, to, subject, body)
-	return smtp.SendMail(s.addr, nil, s.from, []string{to}, []byte(msg))
+	return smtpx.SendMail(ctx, s.addr, nil, s.from, []string{to}, []byte(msg))
 }

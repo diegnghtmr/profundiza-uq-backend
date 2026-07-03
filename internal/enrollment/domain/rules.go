@@ -19,6 +19,7 @@ var (
 	ErrCapacityExceeded    = errors.New("enrollment: accepting this request would exceed the group capacity")
 	ErrUnknownDecision     = errors.New("enrollment: unknown decision type")
 	ErrAlreadyTerminal     = errors.New("enrollment: request is already in a terminal state")
+	ErrTargetGroupRequired = errors.New("enrollment: a target group is required for a create-group acceptance")
 )
 
 // DecisionType is an administrative action on a request.
@@ -57,6 +58,12 @@ type DecisionContext struct {
 	GroupCapacity             int
 	GroupAcceptedCount        int
 	StudentAcceptedInSemester int
+	// TargetGroupID is the group the student is accepted INTO. It is only
+	// meaningful for CREATE_GROUP_ACCEPTANCE, where the admin moves a
+	// waitlisted student into a different (newly created) group; for that
+	// decision type GroupCapacity/GroupAcceptedCount describe the target group.
+	// It is required for CREATE_GROUP_ACCEPTANCE and ignored otherwise.
+	TargetGroupID string
 }
 
 // ApplyDecision validates an administrative decision against the domain rules
@@ -98,6 +105,12 @@ func ApplyDecision(dt DecisionType, ctx DecisionContext) (RequestStatus, error) 
 
 	switch dt {
 	case DecisionAccept, DecisionCreateGroupAcceptance, DecisionCapacityAdjustmentAcceptance:
+		// CREATE_GROUP_ACCEPTANCE moves the student INTO a distinct target group,
+		// so a target must be named. GroupCapacity/GroupAcceptedCount are then
+		// supplied from that target group by the persistence adapter.
+		if dt == DecisionCreateGroupAcceptance && strings.TrimSpace(ctx.TargetGroupID) == "" {
+			return "", ErrTargetGroupRequired
+		}
 		if ctx.StudentAcceptedInSemester >= MaxElectivesPerSemester {
 			return "", ErrMaxElectivesReached
 		}

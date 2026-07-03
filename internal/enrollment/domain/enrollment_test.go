@@ -216,9 +216,12 @@ func TestApplyDecision_CapacityAdjustmentAcceptanceEnforcesCapacity(t *testing.T
 		t.Errorf("CAPACITY_ADJUSTMENT_ACCEPTANCE at full capacity: want ErrCapacityExceeded, got %v", err)
 	}
 
-	// Same test for CREATE_GROUP_ACCEPTANCE: the newly created group's own
-	// capacity must not be exceeded either.
-	if _, err := enroll.ApplyDecision(enroll.DecisionCreateGroupAcceptance, full); !errors.Is(err, enroll.ErrCapacityExceeded) {
+	// Same test for CREATE_GROUP_ACCEPTANCE: the target group's own capacity
+	// must not be exceeded either. A target group is required for this decision,
+	// so the context carries GroupCapacity/GroupAcceptedCount from the target.
+	fullTarget := full
+	fullTarget.TargetGroupID = "11111111-1111-1111-1111-111111111111"
+	if _, err := enroll.ApplyDecision(enroll.DecisionCreateGroupAcceptance, fullTarget); !errors.Is(err, enroll.ErrCapacityExceeded) {
 		t.Errorf("CREATE_GROUP_ACCEPTANCE at full capacity: want ErrCapacityExceeded, got %v", err)
 	}
 
@@ -235,6 +238,63 @@ func TestApplyDecision_CapacityAdjustmentAcceptanceEnforcesCapacity(t *testing.T
 	}
 	if status != enroll.StatusAccepted {
 		t.Errorf("status = %q, want ACCEPTED", status)
+	}
+}
+
+// TestApplyDecision_CreateGroupAcceptanceRequiresTargetGroup verifies the new
+// CREATE_GROUP_ACCEPTANCE contract: the decision moves a waitlisted student into
+// a different (admin-created) target group, so a TargetGroupID is mandatory. An
+// absent target must fail with ErrTargetGroupRequired before any capacity check.
+func TestApplyDecision_CreateGroupAcceptanceRequiresTargetGroup(t *testing.T) {
+	ctx := enroll.DecisionContext{
+		CurrentStatus:      enroll.StatusWaitlistSameShift,
+		Reason:             "moving the student into the newly created group",
+		GroupCapacity:      10,
+		GroupAcceptedCount: 0,
+		// TargetGroupID intentionally empty.
+	}
+	if _, err := enroll.ApplyDecision(enroll.DecisionCreateGroupAcceptance, ctx); !errors.Is(err, enroll.ErrTargetGroupRequired) {
+		t.Errorf("CREATE_GROUP_ACCEPTANCE without a target group should fail with ErrTargetGroupRequired, got %v", err)
+	}
+}
+
+// TestApplyDecision_CreateGroupAcceptanceWithTargetSucceeds verifies the happy
+// path: with a target group and room, a waitlisted student is accepted.
+func TestApplyDecision_CreateGroupAcceptanceWithTargetSucceeds(t *testing.T) {
+	ctx := enroll.DecisionContext{
+		CurrentStatus:      enroll.StatusWaitlistSameShift,
+		Reason:             "moving the student into the newly created group",
+		GroupCapacity:      10,
+		GroupAcceptedCount: 3, // room exists in the target group
+		TargetGroupID:      "22222222-2222-2222-2222-222222222222",
+	}
+	got, err := enroll.ApplyDecision(enroll.DecisionCreateGroupAcceptance, ctx)
+	if err != nil {
+		t.Fatalf("CREATE_GROUP_ACCEPTANCE with a target group and room should succeed, got %v", err)
+	}
+	if got != enroll.StatusAccepted {
+		t.Errorf("status = %q, want ACCEPTED", got)
+	}
+}
+
+// TestApplyDecision_AcceptIgnoresTargetGroup verifies a regression guard: plain
+// ACCEPT and CAPACITY_ADJUSTMENT_ACCEPTANCE never require a target group, so an
+// empty TargetGroupID must not affect them.
+func TestApplyDecision_AcceptIgnoresTargetGroup(t *testing.T) {
+	base := enroll.DecisionContext{
+		CurrentStatus:      enroll.StatusPendingReview,
+		Reason:             "earliest valid request by arrival order",
+		GroupCapacity:      10,
+		GroupAcceptedCount: 0,
+	}
+	for _, dt := range []enroll.DecisionType{enroll.DecisionAccept, enroll.DecisionCapacityAdjustmentAcceptance} {
+		got, err := enroll.ApplyDecision(dt, base)
+		if err != nil {
+			t.Fatalf("%s with no target group should succeed, got %v", dt, err)
+		}
+		if got != enroll.StatusAccepted {
+			t.Errorf("%s -> %q, want ACCEPTED", dt, got)
+		}
 	}
 }
 

@@ -81,6 +81,10 @@ type DecisionInput struct {
 	AdminUserID  string
 	DecisionType domain.DecisionType
 	Reason       string
+	// TargetGroupID is required only for CREATE_GROUP_ACCEPTANCE: the group the
+	// waitlisted student is accepted INTO. It must belong to the same offering as
+	// the original request. Ignored for every other decision type.
+	TargetGroupID string
 }
 
 // Decision is the recorded decision.

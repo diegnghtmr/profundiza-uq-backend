@@ -56,8 +56,9 @@ func (h *Handler) Queue(w http.ResponseWriter, r *http.Request) {
 }
 
 type decisionReq struct {
-	DecisionType string `json:"decisionType"`
-	Reason       string `json:"reason"`
+	DecisionType  string `json:"decisionType"`
+	Reason        string `json:"reason"`
+	TargetGroupID string `json:"targetGroupId"`
 }
 
 // Decide handles POST /admin/enrollment-requests/{requestId}/decisions.
@@ -74,10 +75,11 @@ func (h *Handler) Decide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := h.svc.Decide(r.Context(), app.DecisionInput{
-		RequestID:    chi.URLParam(r, "requestId"),
-		AdminUserID:  adminID,
-		DecisionType: domain.DecisionType(req.DecisionType),
-		Reason:       req.Reason,
+		RequestID:     chi.URLParam(r, "requestId"),
+		AdminUserID:   adminID,
+		DecisionType:  domain.DecisionType(req.DecisionType),
+		Reason:        req.Reason,
+		TargetGroupID: req.TargetGroupID,
 	})
 	if err != nil {
 		writeDecisionError(w, r, err)
@@ -93,6 +95,8 @@ func writeDecisionError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, domain.ErrReasonRequired):
 		httpx.WriteError(w, r, http.StatusBadRequest, httpx.CodeReasonRequired, "A reason of at least 3 characters is required.", nil)
+	case errors.Is(err, domain.ErrTargetGroupRequired):
+		httpx.WriteError(w, r, http.StatusBadRequest, httpx.CodeValidation, "A target group is required for a create-group acceptance.", nil)
 	case errors.Is(err, domain.ErrCapacityExceeded):
 		httpx.WriteError(w, r, http.StatusConflict, httpx.CodeCapacityExceeded, "Accepting this request would exceed the group capacity. Adjust capacity or create a group.", nil)
 	case errors.Is(err, domain.ErrMaxElectivesReached):

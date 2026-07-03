@@ -7,7 +7,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/smtp"
+
+	"github.com/uniquindio/profundiza-uq/internal/platform/smtpx"
 )
 
 // Mailer sends transactional email via SMTP.
@@ -37,7 +38,10 @@ func (m *Mailer) SendLoginCode(ctx context.Context, email, code string) error {
 	if m.addr == "" {
 		return nil // no SMTP configured; dev log above is enough
 	}
-	if err := smtp.SendMail(m.addr, nil, m.from, []string{email}, []byte(msg)); err != nil {
+	// smtpx.SendMail (not net/smtp.SendMail) enforces a hard timeout derived
+	// from ctx (or a sane default) so a stalled/black-holed relay cannot block
+	// this call — and therefore the HTTP handler goroutine — forever.
+	if err := smtpx.SendMail(ctx, m.addr, nil, m.from, []string{email}, []byte(msg)); err != nil {
 		// In development the code is already surfaced in the log, so a missing
 		// local SMTP server must not block the login flow. In other
 		// environments a delivery failure is a real, surfaced error.

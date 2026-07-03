@@ -125,7 +125,76 @@ LIMIT $` + itoa(limitArg) + ` OFFSET $` + itoa(offsetArg)
 		it.Warnings = warningsFor(it, studentAccepted)
 		items = append(items, it)
 	}
-	return items, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	// Attach every item's offering group list. The queue join above only knows
+	// each request's OWN group; the admin UI also needs the offering's SIBLING
+	// groups (e.g. to target a different group in CREATE_GROUP_ACCEPTANCE). Load
+	// them in ONE batched query keyed by the distinct offering IDs on this page
+	// (never one query per request — that would be N+1).
+	if err := r.attachOfferingGroups(ctx, items); err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
+// attachOfferingGroups batch-loads the ACTIVE groups of every offering present in
+// the queue page and assigns each item's full offering group list, scoped per
+// offering. A single query over the distinct offering IDs avoids the N+1 that a
+// per-request lookup would introduce.
+func (r *Repo) attachOfferingGroups(ctx context.Context, items []app.QueueItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	// Collect the distinct offering IDs on this page.
+	seen := map[string]struct{}{}
+	offeringIDs := make([]string, 0, len(items))
+	for _, it := range items {
+		id := it.Request.OfferingID
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		offeringIDs = append(offeringIDs, id)
+	}
+
+	// ONE query: all active groups for every offering on the page, with each
+	// group's live accepted count. `ANY($1)` keeps it a single round-trip.
+	rows, err := r.pool.Query(ctx, `
+SELECT
+  g.id, g.offering_id, g.group_code, g.shift, g.schedule_text, g.capacity, g.status,
+  (SELECT count(*) FROM enrollment_requests er
+     WHERE er.offering_group_id = g.id AND er.status = 'ACCEPTED') AS accepted
+FROM offering_groups g
+WHERE g.offering_id = ANY($1) AND g.status = 'ACTIVE'
+ORDER BY g.offering_id, g.group_code`, offeringIDs)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	byOffering := map[string][]app.Group{}
+	for rows.Next() {
+		var g app.Group
+		if err := rows.Scan(
+			&g.ID, &g.OfferingID, &g.GroupCode, &g.Shift, &g.ScheduleText,
+			&g.Capacity, &g.Status, &g.AcceptedCount,
+		); err != nil {
+			return err
+		}
+		byOffering[g.OfferingID] = append(byOffering[g.OfferingID], g)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for i := range items {
+		items[i].OfferingGroups = byOffering[items[i].Request.OfferingID]
+	}
+	return nil
 }
 
 // warningsFor surfaces administrative warnings for a queue item.

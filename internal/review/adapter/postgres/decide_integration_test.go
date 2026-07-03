@@ -19,13 +19,24 @@ import (
 )
 
 // No TestMain: this package deliberately does NOT truncate. It shares the test
-// database with other integration packages (enrollment, reporting) whose own
-// TestMain issues `TRUNCATE ... CASCADE`; adding a second cascading truncate
-// here would race with those when `go test ./...` runs the package binaries
-// concurrently. Every fixture below is globally unique (per-process runID plus a
-// monotonic suffix) and assertions only touch rows this package created, so
-// leftover rows from previous runs are harmless. Migrations are applied by
-// testPool.
+// database with other integration packages. The enrollment package's TestMain
+// issues `TRUNCATE ... CASCADE` over the full domain table set (semesters,
+// students, offering_groups, enrollment_requests, ...), and the identity
+// package's TestMain truncates the sessions table only; reporting has no
+// TestMain and never truncates. Adding another cascading truncate here would be
+// redundant and, worse, would wipe rows created by concurrently running package
+// binaries. To keep those packages from racing over the shared database, the
+// integration target runs them serialized (`go test -p 1`, see the Makefile
+// `test-int` target).
+//
+// Every fixture below is globally unique via uniqueKey: a per-process runID
+// (nanosecond timestamp, fixed for the life of the process) combined with a
+// per-process monotonic suffix. Because runID differs on every run and every
+// concurrent process, no fixture key collides across repeated or concurrent
+// runs, so `go test ./internal/review/adapter/postgres/...` passes even when run
+// twice in a row against the same non-truncated database. Assertions only touch
+// rows this package created, so leftover rows from previous runs are harmless.
+// Migrations are applied by testPool.
 
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -59,21 +70,19 @@ type fixture struct {
 func newFixture(t *testing.T, pool *pgxpool.Pool, studentShift string) fixture {
 	t.Helper()
 	var f fixture
-	code := fmt.Sprintf("R-%d", randSuffix())
 	mustScan(t, pool, &f.semesterID,
 		`INSERT INTO semesters(code,name,starts_at,ends_at,status)
-		 VALUES ($1,'test',now(),now()+interval '60 days','DRAFT') RETURNING id`, code)
+		 VALUES ($1,'test',now(),now()+interval '60 days','DRAFT') RETURNING id`, uniqueKey("R-"))
 	f.offeringID = seedOffering(t, pool, f.semesterID)
+	// Every fixture key threads runID so rows survive repeated and concurrent
+	// runs against the same non-truncated database without colliding.
 	mustScan(t, pool, &f.studentID,
 		`INSERT INTO students(institutional_email,document_number,full_name,academic_shift)
 		 VALUES ($1,$2,'Student',$3) RETURNING id`,
-		fmt.Sprintf("s%d@uniquindio.edu.co", randSuffix()), fmt.Sprintf("DOC%d", randSuffix()), studentShift)
-	// admin_users is not truncated between runs (see TestMain), so the email must
-	// be unique across runs and across concurrent package processes; a per-process
-	// runID plus the monotonic suffix guarantees that.
+		uniqueKey("s")+"@uniquindio.edu.co", uniqueKey("DOC"), studentShift)
 	mustScan(t, pool, &f.adminID,
 		`INSERT INTO admin_users(institutional_email,full_name,role)
-		 VALUES ($1,'Admin','ADMIN') RETURNING id`, fmt.Sprintf("a%d-%d@uniquindio.edu.co", runID, randSuffix()))
+		 VALUES ($1,'Admin','ADMIN') RETURNING id`, uniqueKey("a")+"@uniquindio.edu.co")
 	return f
 }
 
@@ -81,7 +90,7 @@ func seedOffering(t *testing.T, pool *pgxpool.Pool, semesterID string) string {
 	t.Helper()
 	var electiveID, offeringID string
 	mustScan(t, pool, &electiveID,
-		`INSERT INTO electives(name,area) VALUES ($1,'Area') RETURNING id`, fmt.Sprintf("E-%d", randSuffix()))
+		`INSERT INTO electives(name,area) VALUES ($1,'Area') RETURNING id`, uniqueKey("E-"))
 	mustScan(t, pool, &offeringID,
 		`INSERT INTO elective_offerings(semester_id,elective_id) VALUES ($1,$2) RETURNING id`, semesterID, electiveID)
 	return offeringID
@@ -93,7 +102,7 @@ func seedGroupIn(t *testing.T, pool *pgxpool.Pool, offeringID, shift string, cap
 	mustScan(t, pool, &id,
 		`INSERT INTO offering_groups(offering_id,group_code,shift,schedule_text,capacity)
 		 VALUES ($1,$2,$3,'Mon 8-10',$4) RETURNING id`,
-		offeringID, fmt.Sprintf("G-%d", randSuffix()), shift, capacity)
+		offeringID, uniqueKey("G-"), shift, capacity)
 	return id
 }
 
@@ -107,7 +116,7 @@ func seedRequest(t *testing.T, pool *pgxpool.Pool, f fixture, offeringID, groupI
 		    student_shift, offering_shift, priority_group, status, idempotency_key)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
 		f.semesterID, f.studentID, offeringID, groupID, shift, offeringShift,
-		string(priority), string(status), fmt.Sprintf("idem-%d", randSuffix()))
+		string(priority), string(status), uniqueKey("idem-"))
 	return id
 }
 
@@ -306,16 +315,28 @@ func mustScan(t *testing.T, pool *pgxpool.Pool, dest any, sql string, args ...an
 	}
 }
 
-// runID is unique per test-process so rows in tables that are NOT truncated
-// between runs (admin_users) never collide across repeated or concurrent runs.
+// runID is unique per test-process (a nanosecond timestamp fixed for the life of
+// the process). Threading it into every fixture key means rows never collide
+// across repeated runs (same process would restart runID) or concurrent runs of
+// different package binaries, even though this package never truncates.
 var runID = time.Now().UnixNano()
 
 var suffixMu sync.Mutex
 var suffixSeq int64
 
+// randSuffix returns a monotonic counter unique within the process. It only
+// disambiguates fixtures created within a single run; cross-run/cross-process
+// uniqueness comes from runID (see uniqueKey).
 func randSuffix() int64 {
 	suffixMu.Lock()
 	defer suffixMu.Unlock()
 	suffixSeq++
 	return suffixSeq
+}
+
+// uniqueKey builds a fixture key that is unique across repeated and concurrent
+// test runs: the per-process runID guarantees no two runs share a value, and the
+// monotonic suffix disambiguates multiple fixtures within the same run.
+func uniqueKey(prefix string) string {
+	return fmt.Sprintf("%s%d-%d", prefix, runID, randSuffix())
 }

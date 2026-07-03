@@ -107,6 +107,12 @@ func writeDecisionError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, r, http.StatusBadRequest, httpx.CodeValidation, "Unknown decision type.", nil)
 	case errors.Is(err, reviewpg.ErrRequestNotFound):
 		httpx.WriteError(w, r, http.StatusNotFound, httpx.CodeNotFound, "Enrollment request not found.", nil)
+	case errors.Is(err, reviewpg.ErrTargetGroupNotFound):
+		httpx.WriteError(w, r, http.StatusNotFound, httpx.CodeNotFound, "Target offering group not found.", nil)
+	case errors.Is(err, reviewpg.ErrTargetGroupOfferingMismatch):
+		httpx.WriteError(w, r, http.StatusBadRequest, httpx.CodeValidation, "The target group belongs to a different offering.", nil)
+	case errors.Is(err, reviewpg.ErrDuplicateActiveInTargetGroup):
+		httpx.WriteError(w, r, http.StatusConflict, httpx.CodeConflict, "The student already has an active request in the target group.", nil)
 	default:
 		httpx.WriteError(w, r, http.StatusInternalServerError, httpx.CodeInternal, "Could not record the decision.", nil)
 	}

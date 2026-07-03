@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/uniquindio/profundiza-uq/internal/enrollment/domain"
 	"github.com/uniquindio/profundiza-uq/internal/notification"
@@ -13,8 +14,25 @@ import (
 	"github.com/uniquindio/profundiza-uq/internal/shared/audit"
 )
 
-// ErrRequestNotFound is returned when the target request does not exist.
-var ErrRequestNotFound = errors.New("review: enrollment request not found")
+// uniqueViolation is the PostgreSQL SQLSTATE for a unique-constraint violation.
+const uniqueViolation = "23505"
+
+// Errors surfaced by the decision command. Adapters map these to the API error
+// envelope; they must never leak as raw pg errors.
+var (
+	// ErrRequestNotFound is returned when the target request does not exist.
+	ErrRequestNotFound = errors.New("review: enrollment request not found")
+	// ErrTargetGroupNotFound is returned when a CREATE_GROUP_ACCEPTANCE names a
+	// target group that does not exist.
+	ErrTargetGroupNotFound = errors.New("review: target offering group not found")
+	// ErrTargetGroupOfferingMismatch is returned when the target group belongs to
+	// a different offering than the request; a student may not be moved across
+	// offerings.
+	ErrTargetGroupOfferingMismatch = errors.New("review: target offering group belongs to a different offering")
+	// ErrDuplicateActiveInTargetGroup is returned when the student already holds
+	// an active request in the target group (uq_active_request_per_group).
+	ErrDuplicateActiveInTargetGroup = errors.New("review: student already has an active request in the target group")
+)
 
 // Decide applies an administrative decision atomically: it locks the request
 // and its group, validates the decision with the enrollment domain rules
@@ -28,16 +46,16 @@ func (r *Repo) Decide(ctx context.Context, in app.DecisionInput) (app.DecisionRe
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	var (
-		studentID, email, groupID string
-		current                   domain.RequestStatus
+		studentID, email, groupID, offeringID string
+		current                               domain.RequestStatus
 	)
 	err = tx.QueryRow(ctx,
-		`SELECT er.student_id, s.institutional_email, er.offering_group_id, er.status
+		`SELECT er.student_id, s.institutional_email, er.offering_group_id, er.offering_id, er.status
 		   FROM enrollment_requests er
 		   JOIN students s ON s.id = er.student_id
 		  WHERE er.id = $1
 		  FOR UPDATE OF er`, in.RequestID,
-	).Scan(&studentID, &email, &groupID, &current)
+	).Scan(&studentID, &email, &groupID, &offeringID, &current)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return app.DecisionResult{}, ErrRequestNotFound
 	}
@@ -45,17 +63,44 @@ func (r *Repo) Decide(ctx context.Context, in app.DecisionInput) (app.DecisionRe
 		return app.DecisionResult{}, err
 	}
 
-	// Lock the group and read its capacity.
+	// For CREATE_GROUP_ACCEPTANCE the decision moves the student INTO a different
+	// (admin-created) target group, so the capacity/accepted counts must come
+	// from that target — and the target must belong to the same offering. Every
+	// other decision type keeps evaluating the request's original group.
+	capacityGroupID := groupID
+	if in.DecisionType == domain.DecisionCreateGroupAcceptance {
+		if in.TargetGroupID == "" {
+			// Mirror the domain rule so the caller gets the same typed error
+			// without needing the group lookup below.
+			return app.DecisionResult{}, domain.ErrTargetGroupRequired
+		}
+		var targetOffering string
+		err := tx.QueryRow(ctx,
+			`SELECT offering_id FROM offering_groups WHERE id = $1 FOR UPDATE`, in.TargetGroupID,
+		).Scan(&targetOffering)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return app.DecisionResult{}, ErrTargetGroupNotFound
+		}
+		if err != nil {
+			return app.DecisionResult{}, fmt.Errorf("lock target group: %w", err)
+		}
+		if targetOffering != offeringID {
+			return app.DecisionResult{}, ErrTargetGroupOfferingMismatch
+		}
+		capacityGroupID = in.TargetGroupID
+	}
+
+	// Lock the capacity-relevant group and read its capacity.
 	var capacity int
 	if err := tx.QueryRow(ctx,
-		`SELECT capacity FROM offering_groups WHERE id = $1 FOR UPDATE`, groupID,
+		`SELECT capacity FROM offering_groups WHERE id = $1 FOR UPDATE`, capacityGroupID,
 	).Scan(&capacity); err != nil {
 		return app.DecisionResult{}, fmt.Errorf("lock group: %w", err)
 	}
 
 	var groupAccepted, studentAccepted int
 	if err := tx.QueryRow(ctx,
-		`SELECT count(*) FROM enrollment_requests WHERE offering_group_id=$1 AND status='ACCEPTED'`, groupID,
+		`SELECT count(*) FROM enrollment_requests WHERE offering_group_id=$1 AND status='ACCEPTED'`, capacityGroupID,
 	).Scan(&groupAccepted); err != nil {
 		return app.DecisionResult{}, err
 	}
@@ -74,12 +119,29 @@ func (r *Repo) Decide(ctx context.Context, in app.DecisionInput) (app.DecisionRe
 		GroupCapacity:             capacity,
 		GroupAcceptedCount:        groupAccepted,
 		StudentAcceptedInSemester: studentAccepted,
+		TargetGroupID:             in.TargetGroupID,
 	})
 	if err != nil {
 		return app.DecisionResult{}, err
 	}
 
-	if _, err := tx.Exec(ctx,
+	// CREATE_GROUP_ACCEPTANCE reassigns the request to the target group in the
+	// same UPDATE; every other decision only changes the status. The target
+	// reassignment can collide with uq_active_request_per_group if the student
+	// already holds an active request in the target group — map that to a typed
+	// error instead of leaking the raw unique violation.
+	if in.DecisionType == domain.DecisionCreateGroupAcceptance {
+		if _, err := tx.Exec(ctx,
+			`UPDATE enrollment_requests SET status=$2, offering_group_id=$3, updated_at=now() WHERE id=$1`,
+			in.RequestID, string(newStatus), in.TargetGroupID,
+		); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation && pgErr.ConstraintName == "uq_active_request_per_group" {
+				return app.DecisionResult{}, ErrDuplicateActiveInTargetGroup
+			}
+			return app.DecisionResult{}, fmt.Errorf("reassign and update status: %w", err)
+		}
+	} else if _, err := tx.Exec(ctx,
 		`UPDATE enrollment_requests SET status=$2, updated_at=now() WHERE id=$1`, in.RequestID, string(newStatus),
 	); err != nil {
 		return app.DecisionResult{}, fmt.Errorf("update status: %w", err)

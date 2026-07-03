@@ -221,11 +221,26 @@ func toQueueItemDTO(it app.QueueItem) queueItemDTO {
 		Offering: offeringDTO{
 			ID: it.Request.OfferingID, SemesterID: it.Request.SemesterID,
 			Elective: electiveDTO{ID: it.Elective.ID, Name: it.Elective.Name, Area: it.Elective.Area, Description: it.Elective.Description, Status: it.Elective.Status},
-			Groups: []groupSummaryDTO{{ID: it.Group.ID, GroupCode: it.Group.GroupCode, Shift: it.Group.Shift, ScheduleText: it.Group.ScheduleText, Capacity: it.Group.Capacity, AcceptedCount: it.Group.AcceptedCount, Status: it.Group.Status}},
+			Groups:   toGroupSummaryDTOs(it.OfferingGroups),
 		},
 		Group:    toGroupDTO(it.Group),
 		Warnings: it.Warnings,
 	}
+}
+
+// toGroupSummaryDTOs maps an offering's active groups to their summary form. It
+// always returns a non-nil slice so the JSON payload is `[]` rather than `null`,
+// which keeps the frontend's target-group selector (which filters this list) safe
+// even for single-group offerings.
+func toGroupSummaryDTOs(groups []app.Group) []groupSummaryDTO {
+	out := make([]groupSummaryDTO, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, groupSummaryDTO{
+			ID: g.ID, GroupCode: g.GroupCode, Shift: g.Shift, ScheduleText: g.ScheduleText,
+			Capacity: g.Capacity, AcceptedCount: g.AcceptedCount, Status: g.Status,
+		})
+	}
+	return out
 }
 
 func toGroupDTO(g app.Group) groupDTO {

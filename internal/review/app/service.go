@@ -68,11 +68,17 @@ type RequestRow struct {
 
 // QueueItem is one row of the review queue.
 type QueueItem struct {
-	Request  RequestRow
-	Student  Student
+	Request RequestRow
+	Student Student
+	// Elective is the offering's elective.
 	Elective Elective
-	Group    Group
-	Warnings []string
+	// Group is the request's OWN offering group (the one it currently sits in).
+	Group Group
+	// OfferingGroups is the full list of ACTIVE groups of the request's offering,
+	// scoped per offering. It lets the admin UI target a sibling group (e.g. the
+	// CREATE_GROUP_ACCEPTANCE flow), not just the request's own group.
+	OfferingGroups []Group
+	Warnings       []string
 }
 
 // DecisionInput is an administrative decision command.

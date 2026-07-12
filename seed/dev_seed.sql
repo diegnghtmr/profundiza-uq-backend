@@ -55,7 +55,7 @@ INSERT INTO prerequisites (elective_id, name, description) VALUES
   ('53000000-0000-0000-0000-000000000001', 'Probability & Statistics', 'Passed Probability & Statistics.'),
   ('53000000-0000-0000-0000-000000000001', 'Programming II',           'Solid Python or Java.'),
   ('53000000-0000-0000-0000-000000000003', 'Computer Networks',        'Passed Computer Networks.')
-ON CONFLICT DO NOTHING;
+ON CONFLICT (elective_id, name) WHERE status = 'ACTIVE' DO NOTHING;
 
 -- Offerings for the active semester ------------------------------------------
 INSERT INTO elective_offerings (id, semester_id, elective_id) VALUES
@@ -70,7 +70,7 @@ INSERT INTO offering_prerequisites (offering_id, name, description, source) VALU
   ('54000000-0000-0000-0000-000000000001', 'Probability & Statistics', 'Passed Probability & Statistics.', 'ELECTIVE_DEFAULT'),
   ('54000000-0000-0000-0000-000000000001', 'Programming II',           'Solid Python or Java.',            'ELECTIVE_DEFAULT'),
   ('54000000-0000-0000-0000-000000000003', 'Computer Networks',        'Passed Computer Networks.',        'ELECTIVE_DEFAULT')
-ON CONFLICT DO NOTHING;
+ON CONFLICT (offering_id, name) WHERE status = 'ACTIVE' DO NOTHING;
 
 -- Groups ----------------------------------------------------------------------
 INSERT INTO offering_groups (id, offering_id, group_code, shift, teacher_name, schedule_text, capacity) VALUES
@@ -80,3 +80,12 @@ INSERT INTO offering_groups (id, offering_id, group_code, shift, teacher_name, s
   ('55000000-0000-0000-0000-000000000004', '54000000-0000-0000-0000-000000000003', 'CS-N1', 'NIGHT', 'Prof. Rincón',  'Tue & Thu 20:00–22:00', 20),
   ('55000000-0000-0000-0000-000000000005', '54000000-0000-0000-0000-000000000004', 'SA-D1', 'DAY',   'Prof. Castaño', 'Fri 8:00–12:00', 18)
 ON CONFLICT (offering_id, group_code) DO NOTHING;
+
+-- Global settings --------------------------------------------------------------
+-- The institutional email allow-list consumed by the login flow (identity's
+-- DomainPolicy). A super-admin can edit this at runtime from the Settings page;
+-- the backend falls back to ALLOWED_EMAIL_DOMAINS config when it is absent.
+INSERT INTO global_settings (key, value_json, description) VALUES
+  ('allowed_email_domains', '["uniquindio.edu.co"]',
+   'Institutional email domains allowed to request a login code.')
+ON CONFLICT (key) DO NOTHING;

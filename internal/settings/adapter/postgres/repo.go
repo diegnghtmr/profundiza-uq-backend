@@ -52,6 +52,20 @@ func (r *Repo) List(ctx context.Context, f app.ListFilter) ([]domain.GlobalSetti
 	return out, total, rows.Err()
 }
 
+// GetByKey returns a single setting by key. ok is false when the key does not
+// exist; that is not an error, so callers can fall back to a default.
+func (r *Repo) GetByKey(ctx context.Context, key string) (domain.GlobalSetting, bool, error) {
+	s, err := scan(r.pool.QueryRow(ctx, `SELECT `+columns+` FROM global_settings WHERE key = $1`, key))
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return domain.GlobalSetting{}, false, nil
+	case err != nil:
+		return domain.GlobalSetting{}, false, err
+	default:
+		return s, true, nil
+	}
+}
+
 // Upsert inserts or updates a setting and writes its audit event atomically.
 // The change reason is recorded on the audit event.
 func (r *Repo) Upsert(ctx context.Context, in domain.UpsertSetting, actor app.Actor) (domain.GlobalSetting, error) {

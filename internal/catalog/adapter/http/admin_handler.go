@@ -46,6 +46,8 @@ func writeAdminErr(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, r, http.StatusNotFound, httpx.CodeNotFound, "Not found.", nil)
 	case errors.Is(err, app.ErrAdminInvalid):
 		httpx.WriteError(w, r, http.StatusBadRequest, httpx.CodeValidation, "Invalid input.", nil)
+	case errors.Is(err, app.ErrAdminDuplicate):
+		httpx.WriteError(w, r, http.StatusConflict, httpx.CodeConflict, "A prerequisite with this name already exists.", nil)
 	default:
 		httpx.WriteError(w, r, http.StatusInternalServerError, httpx.CodeInternal, "Could not complete the operation.", nil)
 	}

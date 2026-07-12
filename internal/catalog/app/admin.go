@@ -10,8 +10,9 @@ import (
 
 // Admin errors.
 var (
-	ErrAdminInvalid  = errors.New("catalog: invalid input")
-	ErrAdminNotFound = errors.New("catalog: not found")
+	ErrAdminInvalid   = errors.New("catalog: invalid input")
+	ErrAdminNotFound  = errors.New("catalog: not found")
+	ErrAdminDuplicate = errors.New("catalog: prerequisite already exists")
 )
 
 // Inputs for catalog administration.

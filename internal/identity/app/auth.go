@@ -88,16 +88,29 @@ type (
 	}
 )
 
-// Config carries identity policy settings.
+// Config carries identity policy settings. AllowedDomains is the static,
+// deploy-time institutional email allow-list; a DomainPolicy may override it at
+// request time.
 type Config struct {
 	AllowedDomains []string
 	OTPTTL         time.Duration
 	SessionTTL     time.Duration
 }
 
+// DomainPolicy resolves the institutional email-domain allow-list at request
+// time, letting a runtime-editable source (e.g. a global setting) override the
+// static Config default. ok=false means "no runtime override in effect" — the
+// Config allow-list applies instead. Implementations MUST fail safe: on a
+// missing, unreadable, empty, or malformed source they return ok=false rather
+// than an empty allow-list, which IsAllowedDomain would treat as "accept any".
+type DomainPolicy interface {
+	AllowedDomains(ctx context.Context) (domains []string, ok bool)
+}
+
 // AuthService orchestrates the identity use cases.
 type AuthService struct {
 	cfg        Config
+	policy     DomainPolicy
 	challenges ChallengeStore
 	directory  Directory
 	sessions   SessionStore
@@ -106,9 +119,21 @@ type AuthService struct {
 	codes      Codes
 }
 
-// NewAuthService wires the service with its ports.
-func NewAuthService(cfg Config, ch ChallengeStore, dir Directory, ss SessionStore, m Mailer, clock Clock, codes Codes) *AuthService {
-	return &AuthService{cfg: cfg, challenges: ch, directory: dir, sessions: ss, mailer: m, clock: clock, codes: codes}
+// NewAuthService wires the service with its ports. policy is optional (may be
+// nil), in which case the static Config allow-list is always used.
+func NewAuthService(cfg Config, policy DomainPolicy, ch ChallengeStore, dir Directory, ss SessionStore, m Mailer, clock Clock, codes Codes) *AuthService {
+	return &AuthService{cfg: cfg, policy: policy, challenges: ch, directory: dir, sessions: ss, mailer: m, clock: clock, codes: codes}
+}
+
+// allowedDomains returns the effective allow-list for this request: the runtime
+// policy override when present, otherwise the static Config default.
+func (s *AuthService) allowedDomains(ctx context.Context) []string {
+	if s.policy != nil {
+		if domains, ok := s.policy.AllowedDomains(ctx); ok {
+			return domains
+		}
+	}
+	return s.cfg.AllowedDomains
 }
 
 // StartResult is returned to the caller after starting a login.
@@ -123,7 +148,7 @@ func (s *AuthService) StartLogin(ctx context.Context, rawEmail string) (StartRes
 	email := domain.NormalizeEmail(rawEmail)
 	res := StartResult{ExpiresInSeconds: int(s.cfg.OTPTTL.Seconds())}
 
-	if !domain.IsAllowedDomain(email, s.cfg.AllowedDomains) {
+	if !domain.IsAllowedDomain(email, s.allowedDomains(ctx)) {
 		return res, nil
 	}
 	user, ok, err := s.directory.FindByEmail(ctx, email)

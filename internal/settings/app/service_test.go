@@ -18,6 +18,15 @@ func (f *fakeRepo) List(_ context.Context, _ app.ListFilter) ([]domain.GlobalSet
 	return f.listItems, len(f.listItems), nil
 }
 
+func (f *fakeRepo) GetByKey(_ context.Context, key string) (domain.GlobalSetting, bool, error) {
+	for _, s := range f.listItems {
+		if s.Key == key {
+			return s, true, nil
+		}
+	}
+	return domain.GlobalSetting{}, false, nil
+}
+
 func (f *fakeRepo) Upsert(_ context.Context, in domain.UpsertSetting, _ app.Actor) (domain.GlobalSetting, error) {
 	f.upserts = append(f.upserts, in)
 	return domain.GlobalSetting{Key: in.Key, Value: in.Value}, nil

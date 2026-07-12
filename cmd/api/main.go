@@ -68,6 +68,7 @@ import (
 
 	identityemail "github.com/uniquindio/profundiza-uq/internal/identity/adapter/email"
 	identityhttp "github.com/uniquindio/profundiza-uq/internal/identity/adapter/http"
+	identitypolicy "github.com/uniquindio/profundiza-uq/internal/identity/adapter/policy"
 	identitypg "github.com/uniquindio/profundiza-uq/internal/identity/adapter/postgres"
 	identitysystem "github.com/uniquindio/profundiza-uq/internal/identity/adapter/system"
 	identityapp "github.com/uniquindio/profundiza-uq/internal/identity/app"
@@ -109,10 +110,17 @@ func run(logger *slog.Logger) error {
 	// Wire the semester module (driving adapter -> use case -> driven adapter).
 	semesterSvc := semesterapp.NewService(semesterpg.NewRepo(pool))
 
-	// Wire the identity module.
+	// Global settings service — shared by the settings HTTP handler and the
+	// identity domain policy (runtime-editable institutional email allow-list).
+	settingsSvc := settingsapp.NewService(settingspg.NewRepo(pool))
+
+	// Wire the identity module. The domain policy lets a super-admin override the
+	// static ALLOWED_EMAIL_DOMAINS config at runtime via the
+	// "allowed_email_domains" global setting; it fails safe to the config value.
 	sessionRepo := identitypg.NewSessionRepo(pool)
 	authSvc := identityapp.NewAuthService(
 		identityapp.Config{AllowedDomains: cfg.AllowedDomains, OTPTTL: cfg.OTPTTL, SessionTTL: cfg.SessionTTL},
+		identitypolicy.NewDomainPolicy(settingsSvc, logger),
 		identitypg.NewChallengeRepo(pool),
 		identitypg.NewDirectoryRepo(pool),
 		sessionRepo,
@@ -152,7 +160,7 @@ func run(logger *slog.Logger) error {
 	// Wire the admin-managed modules.
 	studentHandler := studenthttp.NewHandler(studentapp.NewService(studentpg.NewRepo(pool)))
 	adminUserHandler := adminuserhttp.NewHandler(adminuserapp.NewService(adminuserpg.NewRepo(pool)))
-	settingsHandler := settingshttp.NewHandler(settingsapp.NewService(settingspg.NewRepo(pool)))
+	settingsHandler := settingshttp.NewHandler(settingsSvc)
 	auditHandler := audithttp.NewHandler(auditapp.NewService(auditpg.NewRepo(pool)))
 	windowHandler := windowhttp.NewHandler(windowapp.NewService(windowpg.NewRepo(pool)))
 

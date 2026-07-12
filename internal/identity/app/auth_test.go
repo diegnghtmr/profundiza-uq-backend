@@ -100,7 +100,7 @@ func newService(now time.Time) (*app.AuthService, *fakeChallenges, *fakeMailer, 
 	}}
 	svc := app.NewAuthService(
 		app.Config{AllowedDomains: []string{"uniquindio.edu.co"}, OTPTTL: 10 * time.Minute, SessionTTL: time.Hour},
-		ch, dir, sessions, mailer, &fakeClock{t: now}, &fakeCodes{code: "123456"},
+		nil, ch, dir, sessions, mailer, &fakeClock{t: now}, &fakeCodes{code: "123456"},
 	)
 	return svc, ch, mailer, sessions
 }
@@ -206,7 +206,7 @@ func newServiceWithDirectory(now time.Time, dir app.Directory) (*app.AuthService
 	sessions := &fakeSessions{store: map[string]app.SessionRecord{}}
 	svc := app.NewAuthService(
 		app.Config{AllowedDomains: []string{"uniquindio.edu.co"}, OTPTTL: 10 * time.Minute, SessionTTL: time.Hour},
-		ch, dir, sessions, mailer, &fakeClock{t: now}, &fakeCodes{code: "123456"},
+		nil, ch, dir, sessions, mailer, &fakeClock{t: now}, &fakeCodes{code: "123456"},
 	)
 	return svc, ch, mailer, sessions
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/uniquindio/profundiza-uq/internal/catalog/app"
@@ -12,11 +13,25 @@ import (
 	"github.com/uniquindio/profundiza-uq/internal/shared/audit"
 )
 
+// uniqueViolation is the PostgreSQL SQLSTATE for a unique-constraint violation.
+const uniqueViolation = "23505"
+
 // AdminRepo implements the catalog write port.
 type AdminRepo struct{ pool *pgxpool.Pool }
 
 // NewAdminRepo builds a catalog AdminRepo.
 func NewAdminRepo(pool *pgxpool.Pool) *AdminRepo { return &AdminRepo{pool: pool} }
+
+// asDuplicate maps a unique-constraint violation (e.g. the partial unique index
+// on an elective/offering prerequisite name) to the app's duplicate sentinel so
+// the HTTP layer can answer 409 instead of a raw 500. Other errors pass through.
+func asDuplicate(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
+		return app.ErrAdminDuplicate
+	}
+	return err
+}
 
 // ListElectives lists electives filtered by an optional name fragment and area.
 func (r *AdminRepo) ListElectives(ctx context.Context, q, area string) ([]domain.Elective, error) {
@@ -132,7 +147,7 @@ func (r *AdminRepo) CreatePrerequisite(ctx context.Context, in app.CreatePrerequ
 		return audit.Write(ctx, tx, audit.Event{ActorType: audit.ActorAdmin, ActorID: in.ActorID,
 			Action: "PREREQUISITE_CREATED", EntityType: "Prerequisite", EntityID: p.ID})
 	})
-	return p, err
+	return p, asDuplicate(err)
 }
 
 // CreateOffering offers an elective in a semester and returns the offering id.
@@ -167,7 +182,7 @@ func (r *AdminRepo) CreateOfferingPrereq(ctx context.Context, in app.CreateOffer
 		return audit.Write(ctx, tx, audit.Event{ActorType: audit.ActorAdmin, ActorID: in.ActorID,
 			Action: "OFFERING_PREREQUISITE_CREATED", EntityType: "OfferingPrerequisite", EntityID: p.ID})
 	})
-	return p, err
+	return p, asDuplicate(err)
 }
 
 // CreateGroup creates an offering group with a mandatory audited reason.

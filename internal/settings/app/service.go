@@ -52,6 +52,7 @@ type Page struct {
 // Repository is the output port for global-settings persistence.
 type Repository interface {
 	List(ctx context.Context, f ListFilter) (items []domain.GlobalSetting, total int, err error)
+	GetByKey(ctx context.Context, key string) (domain.GlobalSetting, bool, error)
 	Upsert(ctx context.Context, in domain.UpsertSetting, actor Actor) (domain.GlobalSetting, error)
 }
 
@@ -74,6 +75,12 @@ func (s *Service) List(ctx context.Context, f ListFilter) (Page, error) {
 		items = []domain.GlobalSetting{}
 	}
 	return Page{Items: items, Page: f.Page, PageSize: f.PageSize, Total: total}, nil
+}
+
+// Get returns a single setting by key. ok is false when no setting exists for
+// the key — not an error — so callers can apply their own default.
+func (s *Service) Get(ctx context.Context, key string) (domain.GlobalSetting, bool, error) {
+	return s.repo.GetByKey(ctx, key)
 }
 
 // Upsert validates and persists a setting value, writing an audit event.

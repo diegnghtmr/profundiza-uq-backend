@@ -95,3 +95,7 @@ All modules follow `adapter -> app -> domain` and are wired in `cmd/api/main.go`
 **Cross-cutting:** every state change writes an `audit_events` row and enqueues notifications in the same transaction; concurrency is protected by row locks; migrations are guarded by a `pg_advisory_lock`.
 
 **Known gaps / next:** `sqlc` + OpenTelemetry adoption; `students/import` multipart upload; richer report column sets.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

@@ -122,6 +122,10 @@ migrations/   Embedded schema migrations
 seed/         Disposable development fixtures
 ```
 
+## Documentation
+
+- [API reference](docs/api-reference.md) — runtime layout, HTTP methods and paths, and role boundaries.
+
 ## Related repositories
 
 - [profundiza-uq-frontend](https://github.com/diegnghtmr/profundiza-uq-frontend) — student plan, request status, and staff review interface.
